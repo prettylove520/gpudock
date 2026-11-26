@@ -1,0 +1,24 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+
+# M0 results may be shared, but keep raw logs out of the repo by default
+m0-results/
+
+# never commit OAuth client secrets or tokens
+client_secret*.json
+token.json
+# project OAuth client, embedded into release builds by CI only
+packages/core/src/gpudock_core/_oauth_client.json
+
+# web UI
+node_modules/
+packages/core/src/gpudock_core/web/dist/
+
+# local tooling
+.claude/

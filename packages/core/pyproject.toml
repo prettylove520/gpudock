@@ -1,0 +1,50 @@
+[project]
+name = "gpudock-core"
+version = "0.0.1"
+description = "GPUDock core: Google Colab runtime client (M0 spike)"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.28",
+    "websockets>=15.0",
+    "google-auth>=2.40",
+    "google-auth-oauthlib>=1.2",
+    "keyring>=25.0",
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
+    "python-multipart>=0.0.18",
+]
+
+[project.optional-dependencies]
+desktop = ["pywebview>=5.0"]
+
+[project.scripts]
+gpudock = "gpudock_core.server.main:main"
+gpudock-m0 = "gpudock_core.m0.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "respx>=0.22",
+    "jupyter-server>=2.14",
+    "ipykernel>=6.29",
+    "numpy>=1.26",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gpudock_core"]
+
+[tool.hatch.build]
+# Gitignored, written by scripts/embed_oauth_client.py in release CI.
+artifacts = ["src/gpudock_core/_oauth_client.json", "src/gpudock_core/web/dist/**"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: needs a local jupyter_server (installed via the dev group)",
+]

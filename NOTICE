@@ -1,0 +1,17 @@
+GPUDock
+Copyright 2026 GPUDock contributors
+
+This product talks to Google Colab through Google's official Colab API
+(colaboratory.googleapis.com). The client design was informed by Google's
+open-source googlecolab/colab-vscode and googlecolab/google-colab-cli
+projects (Apache License 2.0).
+
+GPUDock is not affiliated with, endorsed by, or sponsored by Google.
+"Google" and "Colab" are trademarks of Google LLC.
+
+Models deployed by GPUDock are downloaded from their official sources at
+runtime and are covered by their own licenses (see the model library page
+or packages/core/src/gpudock_core/agent/gpudock_agent.py, RECIPES).
+
+UI imagery in apps/web/public/img was generated with OpenAI's image API
+(see scripts/gen_images.py) and is distributed under the project's license.

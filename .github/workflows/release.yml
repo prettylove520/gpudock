@@ -1,0 +1,33 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: astral-sh/setup-uv@v6
+      - name: Build web UI into the Python package
+        working-directory: apps/web
+        run: npm ci && npm run build
+      - name: Embed the project's OAuth client (Desktop app type)
+        env:
+          GPUDOCK_OAUTH_CLIENT_JSON: ${{ secrets.GPUDOCK_OAUTH_CLIENT_JSON }}
+        run: python scripts/embed_oauth_client.py
+      - name: Build wheel and sdist
+        working-directory: packages/core
+        run: uv build -o ../../dist
+      - name: Attach to the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
