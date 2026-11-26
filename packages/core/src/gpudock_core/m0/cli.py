@@ -23,6 +23,7 @@ from ..auth import (
 )
 from ..colab_api import ColabApi
 from ..errors import AuthError, ColabApiError
+from ..proxy import use_system_proxy
 from . import experiments as ex
 from .recorder import Recorder, build_report
 
@@ -265,6 +266,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
+    use_system_proxy()
     args = build_parser().parse_args(argv)
     try:
         args.func(args)
