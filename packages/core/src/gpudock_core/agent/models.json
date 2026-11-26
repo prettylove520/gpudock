@@ -1,0 +1,970 @@
+{
+  "recipes": {
+    "whisper": {
+      "name": "Whisper 语音识别",
+      "engine": "faster-whisper",
+      "category": "asr",
+      "summary": "把语音转成带时间轴的文字，支持 99 种语言，批量转写和配音的第一步。",
+      "license": "MIT",
+      "commercial": "yes",
+      "vram_gb": 5,
+      "download": "约 1.6 GB",
+      "install_minutes": 2,
+      "models": [
+        "large-v3-turbo",
+        "large-v3",
+        "medium",
+        "small"
+      ],
+      "homepage": "https://github.com/SYSTRAN/faster-whisper"
+    },
+    "demucs": {
+      "name": "Demucs 人声分离",
+      "engine": "htdemucs",
+      "category": "audio",
+      "summary": "把人声和背景音乐分开，配音时保留原视频的 BGM 和音效。",
+      "license": "MIT",
+      "commercial": "yes",
+      "vram_gb": 3,
+      "download": "约 80 MB",
+      "install_minutes": 1,
+      "homepage": "https://github.com/facebookresearch/demucs"
+    },
+    "kokoro": {
+      "name": "Kokoro 预置音色",
+      "engine": "Kokoro-82M",
+      "category": "tts",
+      "summary": "轻量、快速的文字转语音，中文 8 种、英文 20 多种预置音色，可商用。",
+      "license": "Apache-2.0",
+      "commercial": "yes",
+      "vram_gb": 1,
+      "download": "约 350 MB",
+      "install_minutes": 2,
+      "homepage": "https://huggingface.co/hexgrad/Kokoro-82M"
+    },
+    "voxcpm": {
+      "name": "VoxCPM2 声音克隆",
+      "engine": "openbmb/VoxCPM2",
+      "category": "tts",
+      "summary": "用一小段参考音频克隆音色，支持 30 种语言。只能克隆你有权使用的声音。",
+      "note": "加载时约需 10 GB 内存：请用 L4、A100 等，或 T4 高内存版（T4 标准版内存不够）。",
+      "min_ram_gb": 20,
+      "license": "Apache-2.0",
+      "commercial": "yes",
+      "vram_gb": 8,
+      "download": "约 4 GB",
+      "install_minutes": 5,
+      "homepage": "https://github.com/OpenBMB/VoxCPM"
+    },
+    "qwen": {
+      "name": "大语言模型（Ollama）",
+      "engine": "Ollama · Qwen3 / Qwen3.8 / Inkling-2",
+      "category": "llm",
+      "summary": "在运行时里跑的大模型，用于字幕翻译、改写和对话，不需要外部 API。可选 Qwen3 8B 到 Qwen3.8 27B。",
+      "license": "Apache-2.0",
+      "commercial": "yes",
+      "vram_gb": 6,
+      "download": "约 5 GB（8B）",
+      "install_minutes": 4,
+      "models": [
+        "qwen3:8b",
+        "qwen3:4b",
+        "qwen3:14b"
+      ],
+      "homepage": "https://ollama.com/library/qwen3"
+    },
+    "comfyui": {
+      "name": "ComfyUI 生成引擎",
+      "engine": "ComfyUI + 官方工作流模板",
+      "category": "engine",
+      "summary": "生图、生视频用的引擎。第一次用“创作”时自动部署，模型按需下载到运行时。",
+      "license": "GPL-3.0",
+      "commercial": "yes",
+      "vram_gb": 0,
+      "download": "约 1 GB（不含模型）",
+      "install_minutes": 3,
+      "homepage": "https://github.com/Comfy-Org/ComfyUI"
+    }
+  },
+  "gen_models": {
+    "wan22_5b": {
+      "name": "Wan2.2 TI2V 5B",
+      "kind": "video",
+      "vendor": "阿里通义万相",
+      "summary": "文生视频、图生视频二合一，720p。最省显存的开源视频模型，适合先上手。",
+      "license": "Apache-2.0",
+      "commercial": "yes",
+      "templates": {
+        "t2v": "video_wan2_2_5B_ti2v",
+        "i2v": "video_wan2_2_5B_ti2v"
+      },
+      "gpus": [
+        "L4",
+        "A100",
+        "G4",
+        "H100"
+      ],
+      "vram_gb": 8,
+      "download_gb": 17,
+      "fps": 24,
+      "max_seconds": 5,
+      "size": [
+        1280,
+        704
+      ]
+    },
+    "wan22_14b": {
+      "name": "Wan2.2 A14B",
+      "kind": "video",
+      "vendor": "阿里通义万相",
+      "summary": "Wan2.2 旗舰版（高低噪声双专家），画质和运动更好；支持文生、图生、首尾帧。",
+      "license": "Apache-2.0",
+      "commercial": "yes",
+      "templates": {
+        "t2v": "video_wan2_2_14B_t2v",
+        "i2v": "video_wan2_2_14B_i2v",
+        "flf2v": "video_wan2_2_14B_flf2v"
+      },
+      "gpus": [
+        "A100",
+        "G4",
+        "H100"
+      ],
+      "vram_gb": 24,
+      "download_gb": 64,
+      "fps": 16,
+      "max_seconds": 5,
+      "size": [
+        832,
+        480
+      ],
+      "hd_size": [
+        1280,
+        720
+      ],
+      "fast": "Lightning 4 步"
+    },
+    "ltx25": {
+      "name": "LTX-2.5",
+      "kind": "video",
+      "vendor": "Lightricks",
+      "summary": "当前下载量最高的开源视频模型：画面和声音一次生成，支持文生、图生、首尾帧。",
+      "license": "LTX-2.x Community License",
+      "commercial": "conditional",
+      "license_note": "年收入 1000 万美元以下可免费商用，超过需购买授权。权重需在 Hugging Face 申请访问。",
+      "gated": "Lightricks/LTX-2.5",
+      "templates": {
+        "t2v": "video_ltx2_5_t2v",
+        "i2v": "video_ltx2_5_i2v",
+        "flf2v": "video_ltx2_5_flf2v"
+      },
+      "gpus": [
+        "A100",
+        "G4",
+        "H100"
+      ],
+      "vram_gb": 32,
+      "download_gb": 45,
+      "fps": 24,
+      "max_seconds": 10,
+      "size": [
+        1280,
+        704
+      ],
+      "hd_size": [
+        1920,
+        1088
+      ]
+    },
+    "minimax_h3": {
+      "name": "MiniMax H3",
+      "kind": "video",
+      "vendor": "MiniMax",
+      "summary": "海螺同源的视频+音频模型：文生、图生、首尾帧、最多 9 张参考图，自带对白和音效，最长 15 秒。",
+      "license": "MiniMax H3 Community License",
+      "commercial": "conditional",
+      "license_note": "许可地区不含欧盟、英国、美国、韩国；年收入超 2000 万美元需书面授权；商用需标注 MiniMax H3；不得用输出训练其他模型。",
+      "templates": {
+        "t2v": "video_minimax_h3_t2v",
+        "i2v": "video_minimax_h3_t2v",
+        "flf2v": "video_minimax_h3_t2v",
+        "r2v": "video_minimax_h3_r2v"
+      },
+      "gpus": [
+        "G4",
+        "H100",
+        "A100"
+      ],
+      "vram_gb": 40,
+      "download_gb": 61,
+      "fps": 24,
+      "max_seconds": 15,
+      "size": [
+        832,
+        480
+      ],
+      "hd_size": [
+        1344,
+        768
+      ],
+      "fast": "Turbo LoRA 8 步",
+      "experimental": true
+    },
+    "z_image_turbo": {
+      "name": "Z-Image Turbo",
+      "kind": "image",
+      "vendor": "阿里通义",
+      "summary": "8 步出图的轻量文生图模型，中英文字渲染好，L4 就能跑，最适合先上手。",
+      "license": "Apache-2.0",
+      "commercial": "yes",
+      "templates": {
+        "t2i": "image_z_image_turbo"
+      },
+      "gpus": [
+        "L4",
+        "A100",
+        "G4",
+        "H100"
+      ],
+      "vram_gb": 16,
+      "download_gb": 19,
+      "size": [
+        1024,
+        1024
+      ],
+      "hd_size": [
+        1536,
+        1536
+      ]
+    },
+    "qwen_image_21": {
+      "name": "Qwen-Image 2.1",
+      "kind": "image",
+      "vendor": "阿里通义千问",
+      "summary": "通义千问图像模型：文生图与多图编辑，中文海报和文字排版能力强（Turbo 8 步）。",
+      "license": "见模型仓库",
+      "commercial": "unknown",
+      "templates": {
+        "t2i": "image_qwen_image_2_1_turbo_t2i",
+        "edit": "image_qwen_image_2_1_turbo_image_edit"
+      },
+      "gpus": [
+        "L4",
+        "A100",
+        "G4",
+        "H100"
+      ],
+      "vram_gb": 20,
+      "download_gb": 34,
+      "size": [
+        1024,
+        1024
+      ],
+      "hd_size": [
+        1536,
+        1536
+      ]
+    },
+    "flux3_klein": {
+      "name": "FLUX 3 Klein",
+      "kind": "image",
+      "vendor": "Black Forest Labs",
+      "summary": "FLUX 3 的轻量版：文生图与参考图编辑，蒸馏版 4–16 步出图。",
+      "license": "FLUX Kommunity License",
+      "commercial": "unknown",
+      "license_note": "权重需在 Hugging Face 申请访问并同意许可，商用条款以仓库 LICENSE 为准。",
+      "gated": "black-forest-labs/flux-3-image-klein-comfy",
+      "templates": {
+        "t2i": "image_flux3_klein_distilled_t2i",
+        "edit": "image_flux3_klein_distilled_image_edit"
+      },
+      "gpus": [
+        "L4",
+        "A100",
+        "G4",
+        "H100"
+      ],
+      "vram_gb": 16,
+      "download_gb": 20,
+      "size": [
+        1024,
+        1024
+      ],
+      "hd_size": [
+        1536,
+        1536
+      ]
+    },
+    "h3_image": {
+      "name": "MiniMax H3 Image",
+      "kind": "image",
+      "vendor": "MiniMax",
+      "summary": "33B 图像模型：最高 4K，最多 16 张参考图，文生图与图像编辑，6 步出图。",
+      "license": "MiniMax H3 Image Community License",
+      "commercial": "conditional",
+      "license_note": "条款与 MiniMax H3 类似（含地区限制），商用前请阅读仓库 LICENSE。",
+      "templates": {
+        "t2i": "image_minimax_h3_image_t2i",
+        "edit": "image_minimax_h3_image_edit"
+      },
+      "gpus": [
+        "A100",
+        "G4",
+        "H100"
+      ],
+      "vram_gb": 40,
+      "download_gb": 53,
+      "size": [
+        2048,
+        2048
+      ],
+      "hd_size": [
+        4096,
+        4096
+      ],
+      "experimental": true
+    }
+  },
+  "mode_labels": {
+    "t2v": "文生视频",
+    "i2v": "图生视频",
+    "flf2v": "首尾帧",
+    "r2v": "参考生成",
+    "t2i": "文生图",
+    "edit": "图像编辑"
+  },
+  "llm_models": [
+    {
+      "id": "qwen3:8b",
+      "name": "Qwen3 8B",
+      "vram_gb": 6,
+      "note": "默认，翻译与对话够用，T4 可跑"
+    },
+    {
+      "id": "hf.co/unsloth/Qwen3.8-27B-GGUF:Q4_K_M",
+      "name": "Qwen3.8 27B（Q4）",
+      "vram_gb": 18,
+      "note": "2026 年 11 月下载量最高的开源大模型，需 L4 或更好"
+    },
+    {
+      "id": "hf.co/unsloth/Qwen3.8-Flash-Next-GGUF:Q4_K_M",
+      "name": "Qwen3.8 Flash Next（Q4）",
+      "vram_gb": 14,
+      "note": "更快的 MoE 版本"
+    },
+    {
+      "id": "hf.co/unsloth/Inkling-2-Mini-GGUF:Q4_K_M",
+      "name": "Inkling-2 Mini（Q4）",
+      "vram_gb": 12,
+      "note": "Thinking Machines 的多模态小模型"
+    }
+  ],
+  "template_params": {
+    "video_wan2_2_5B_ti2v": {
+      "prompt": [
+        [
+          "6",
+          "text"
+        ]
+      ],
+      "width": [
+        [
+          "55",
+          "width"
+        ]
+      ],
+      "height": [
+        [
+          "55",
+          "height"
+        ]
+      ],
+      "frames": [
+        [
+          "55",
+          "length"
+        ]
+      ],
+      "seed": [
+        [
+          "3",
+          "seed"
+        ]
+      ],
+      "fps": 24,
+      "frame_step": 4,
+      "enable": {
+        "i2v": [
+          "56"
+        ]
+      },
+      "ui_images": {
+        "i2v": [
+          "56"
+        ]
+      }
+    },
+    "video_wan2_2_14B_t2v": {
+      "prompt": [
+        [
+          "128:89",
+          "text"
+        ]
+      ],
+      "width": [
+        [
+          "128:74",
+          "width"
+        ]
+      ],
+      "height": [
+        [
+          "128:74",
+          "height"
+        ]
+      ],
+      "seconds": [
+        [
+          "128:126",
+          "value"
+        ]
+      ],
+      "seed": [
+        [
+          "128:81",
+          "noise_seed"
+        ]
+      ],
+      "fast": [
+        [
+          "128:129",
+          "value"
+        ]
+      ]
+    },
+    "video_wan2_2_14B_i2v": {
+      "prompt": [
+        [
+          "129:93",
+          "text"
+        ]
+      ],
+      "width": [
+        [
+          "129:98",
+          "width"
+        ]
+      ],
+      "height": [
+        [
+          "129:98",
+          "height"
+        ]
+      ],
+      "seconds": [
+        [
+          "129:161",
+          "value"
+        ]
+      ],
+      "seed": [
+        [
+          "129:86",
+          "noise_seed"
+        ]
+      ],
+      "fast": [
+        [
+          "129:131",
+          "value"
+        ]
+      ],
+      "ui_images": {
+        "i2v": [
+          "97"
+        ]
+      }
+    },
+    "video_wan2_2_14B_flf2v": {
+      "prompt": [
+        [
+          "90",
+          "text"
+        ]
+      ],
+      "width": [
+        [
+          "81",
+          "width"
+        ]
+      ],
+      "height": [
+        [
+          "81",
+          "height"
+        ]
+      ],
+      "frames": [
+        [
+          "81",
+          "length"
+        ]
+      ],
+      "seed": [
+        [
+          "84",
+          "noise_seed"
+        ]
+      ],
+      "fps": 16,
+      "frame_step": 4,
+      "ui_images": {
+        "flf2v": [
+          "80",
+          "89"
+        ]
+      }
+    },
+    "video_ltx2_5_t2v": {
+      "prompt": [
+        [
+          "405:376",
+          "value"
+        ]
+      ],
+      "width": [
+        [
+          "405:372",
+          "value"
+        ]
+      ],
+      "height": [
+        [
+          "405:360",
+          "value"
+        ]
+      ],
+      "seconds_int": [
+        [
+          "405:362",
+          "value"
+        ]
+      ],
+      "seed": [
+        [
+          "405:339",
+          "noise_seed"
+        ]
+      ]
+    },
+    "video_ltx2_5_i2v": {
+      "prompt": [
+        [
+          "398:376",
+          "value"
+        ]
+      ],
+      "width": [
+        [
+          "398:372",
+          "value"
+        ]
+      ],
+      "height": [
+        [
+          "398:360",
+          "value"
+        ]
+      ],
+      "seconds_int": [
+        [
+          "398:362",
+          "value"
+        ]
+      ],
+      "seed": [
+        [
+          "398:339",
+          "noise_seed"
+        ]
+      ],
+      "ui_images": {
+        "i2v": [
+          "395"
+        ]
+      }
+    },
+    "video_ltx2_5_flf2v": {
+      "prompt": [
+        [
+          "251:252",
+          "value"
+        ]
+      ],
+      "width": [
+        [
+          "251:215",
+          "value"
+        ]
+      ],
+      "height": [
+        [
+          "251:216",
+          "value"
+        ]
+      ],
+      "seconds_int": [
+        [
+          "251:198",
+          "value"
+        ]
+      ],
+      "seed": [
+        [
+          "251:196",
+          "noise_seed"
+        ]
+      ],
+      "ui_images": {
+        "flf2v": [
+          "31",
+          "39"
+        ]
+      }
+    },
+    "video_minimax_h3_t2v": {
+      "prompt": [
+        [
+          "140:131",
+          "prompt"
+        ]
+      ],
+      "width": [
+        [
+          "140:131",
+          "width"
+        ]
+      ],
+      "height": [
+        [
+          "140:131",
+          "height"
+        ]
+      ],
+      "seconds": [
+        [
+          "140:133",
+          "value"
+        ]
+      ],
+      "seed": [
+        [
+          "140:129",
+          "noise_seed"
+        ]
+      ],
+      "fast": [
+        [
+          "140:139",
+          "value"
+        ]
+      ],
+      "image_slots": {
+        "i2v": [
+          [
+            "140:131",
+            "first_frame"
+          ]
+        ],
+        "flf2v": [
+          [
+            "140:131",
+            "first_frame"
+          ],
+          [
+            "140:131",
+            "last_frame"
+          ]
+        ]
+      }
+    },
+    "video_minimax_h3_r2v": {
+      "prompt": [
+        [
+          "138",
+          "value"
+        ]
+      ],
+      "width": [
+        [
+          "136",
+          "width"
+        ]
+      ],
+      "height": [
+        [
+          "136",
+          "height"
+        ]
+      ],
+      "seconds": [
+        [
+          "132",
+          "value"
+        ]
+      ],
+      "seed": [
+        [
+          "129",
+          "noise_seed"
+        ]
+      ],
+      "fast": [
+        [
+          "146",
+          "value"
+        ]
+      ],
+      "image_slots": {
+        "r2v": [
+          [
+            "136",
+            "ref_images.ref_image_0"
+          ],
+          [
+            "136",
+            "ref_images.ref_image_1"
+          ],
+          [
+            "136",
+            "ref_images.ref_image_2"
+          ],
+          [
+            "136",
+            "ref_images.ref_image_3"
+          ],
+          [
+            "136",
+            "ref_images.ref_image_4"
+          ],
+          [
+            "136",
+            "ref_images.ref_image_5"
+          ],
+          [
+            "136",
+            "ref_images.ref_image_6"
+          ],
+          [
+            "136",
+            "ref_images.ref_image_7"
+          ],
+          [
+            "136",
+            "ref_images.ref_image_8"
+          ]
+        ]
+      },
+      "clear": {
+        "r2v": [
+          [
+            "136",
+            "ref_images."
+          ]
+        ]
+      },
+      "drop": {
+        "r2v": [
+          "137",
+          "139"
+        ]
+      }
+    },
+    "image_z_image_turbo": {
+      "prompt": [
+        [
+          "57:27",
+          "text"
+        ]
+      ],
+      "width": [
+        [
+          "57:13",
+          "width"
+        ]
+      ],
+      "height": [
+        [
+          "57:13",
+          "height"
+        ]
+      ],
+      "seed": [
+        [
+          "57:3",
+          "seed"
+        ]
+      ]
+    },
+    "image_qwen_image_2_1_turbo_t2i": {
+      "prompt": [
+        [
+          "459:474",
+          "on_false"
+        ],
+        [
+          "459:471",
+          "prompt"
+        ]
+      ],
+      "width": [
+        [
+          "459:456",
+          "width"
+        ]
+      ],
+      "height": [
+        [
+          "459:456",
+          "height"
+        ]
+      ],
+      "seed": [
+        [
+          "459:488",
+          "noise_seed"
+        ]
+      ]
+    },
+    "image_qwen_image_2_1_turbo_image_edit": {
+      "prompt": [
+        [
+          "459:484",
+          "on_false"
+        ],
+        [
+          "459:500",
+          "prompt"
+        ]
+      ],
+      "seed": [
+        [
+          "459:504",
+          "noise_seed"
+        ]
+      ],
+      "ui_images": {
+        "edit": [
+          "470"
+        ]
+      }
+    },
+    "image_flux3_klein_distilled_t2i": {
+      "prompt": [
+        [
+          "18:17",
+          "value"
+        ]
+      ],
+      "width": [
+        [
+          "18:6",
+          "width"
+        ]
+      ],
+      "height": [
+        [
+          "18:6",
+          "height"
+        ]
+      ],
+      "seed": [
+        [
+          "18:7",
+          "seed"
+        ]
+      ]
+    },
+    "image_flux3_klein_distilled_image_edit": {
+      "prompt": [
+        [
+          "49",
+          "prompt"
+        ]
+      ],
+      "seed": [
+        [
+          "7",
+          "seed"
+        ]
+      ],
+      "ui_images": {
+        "edit": [
+          "11"
+        ]
+      },
+      "set": {
+        "edit": [
+          [
+            "33",
+            "editor_state",
+            {
+              "__value__": []
+            }
+          ]
+        ]
+      }
+    },
+    "image_minimax_h3_image_t2i": {
+      "prompt": [
+        [
+          "23:24",
+          "value"
+        ]
+      ],
+      "width": [
+        [
+          "23:5",
+          "width"
+        ]
+      ],
+      "height": [
+        [
+          "23:5",
+          "height"
+        ]
+      ],
+      "seed": [
+        [
+          "23:7",
+          "seed"
+        ]
+      ]
+    },
+    "image_minimax_h3_image_edit": {
+      "prompt": [
+        [
+          "43",
+          "value"
+        ]
+      ],
+      "megapixels": [
+        [
+          "56",
+          "resize_type.megapixels"
+        ]
+      ],
+      "seed": [
+        [
+          "38",
+          "seed"
+        ]
+      ],
+      "ui_images": {
+        "edit": [
+          "45"
+        ]
+      }
+    }
+  }
+}

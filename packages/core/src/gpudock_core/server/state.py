@@ -17,7 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..agent import AGENT_FILE
+from ..agent import AGENT_FILES
 from ..agent.gpudock_agent import EVT
 from ..auth import (
     Authenticator,
@@ -360,9 +360,13 @@ class RuntimeHandle:
         return posixpath.join(self.fs_root, remote_path)
 
     def _ensure_agent(self) -> None:
-        digest = hashlib.sha256(AGENT_FILE.read_bytes()).hexdigest()[:16]
+        h = hashlib.sha256()
+        for f in AGENT_FILES:
+            h.update(f.read_bytes())
+        digest = h.hexdigest()[:16]
         if self.agent_uploaded != digest:
-            upload(self._connection(), AGENT_FILE, self.remote("gpudock_agent.py"))
+            for f in AGENT_FILES:
+                upload(self._connection(), f, self.remote(f.name))
             self.agent_uploaded = digest
 
     def run_agent(

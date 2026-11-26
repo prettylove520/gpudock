@@ -27,6 +27,7 @@ cd packages/core && uv sync && uv run pytest -q
 | `packages/core/src/gpudock_core/colab_api.py` | 官方 Colab API 客户端 |
 | `packages/core/src/gpudock_core/jupyter.py` | 经运行时代理的 Jupyter REST + 内核 WebSocket |
 | `packages/core/src/gpudock_core/agent/gpudock_agent.py` | 上传到 Colab 运行时里执行的 agent：模型部署、转写、分离、合成、翻译、混音 |
+| `packages/core/src/gpudock_core/agent/models.json` | 模型清单：可部署的配方、生图生视频模型及其 ComfyUI 模板参数、翻译用的大模型。加模型、改许可证或显存只改这里 |
 | `packages/core/src/gpudock_core/server/` | 本地 FastAPI 服务：登录、运行时、任务编排 |
 | `apps/web/` | React + TypeScript 界面 |
 
@@ -42,12 +43,12 @@ Key 从 `OPENAI_API_KEY` 或 `~/.config/gpudock/openai.key` 读取；加 `--forc
 
 ## 新增一个模型（配方）
 
-1. 在 `gpudock_agent.py` 的 `RECIPES` 里加一条元数据（名称、类别、许可证、是否可商用、显存、下载大小）。
+1. 在 `agent/models.json` 的 `recipes` 里加一条元数据（名称、类别、许可证、是否可商用、显存、下载大小）。
 2. 写 `_install_<id>()`：系统 Python 能装就用 `pip_install`；依赖不支持 Colab 当前 Python（2026 年起是 3.13）时，用 `ensure_env("tts", ...)` 装进隔离的 Python 3.12 环境。
 3. 在对应命令里接入（例如 `_tts_engine`），重活都在 agent 子进程里跑，结束后显存自动释放。
 4. 在 `GPUDOCK_AGENT_FAKE=1` 下给它一个替身实现，让 `tests/test_tasks.py` 不依赖 GPU 也能覆盖流程。
 
-请只接入许可证清楚、来源官方的模型，并在 `RECIPES` 里如实标注是否可商用。
+请只接入许可证清楚、来源官方的模型，并在 `models.json` 里如实标注是否可商用。
 
 ## 原则
 

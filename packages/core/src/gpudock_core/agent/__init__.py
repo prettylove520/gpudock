@@ -3,3 +3,5 @@
 from pathlib import Path
 
 AGENT_FILE = Path(__file__).with_name("gpudock_agent.py")
+# Uploaded next to the agent, which reads its model catalogue from it.
+AGENT_FILES = (AGENT_FILE, AGENT_FILE.with_name("models.json"))
