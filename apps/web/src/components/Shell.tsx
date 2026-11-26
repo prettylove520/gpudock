@@ -22,15 +22,23 @@ interface Dialog extends ConfirmOptions {
   resolve: (ok: boolean) => void;
 }
 
-const NAV: { route: Route; label: string }[] = [
-  { route: "gpus", label: "显卡" },
-  { route: "models", label: "模型库" },
-  { route: "create", label: "创作" },
-  { route: "transcribe", label: "批量转写" },
-  { route: "dub", label: "批量配音" },
-  { route: "tts", label: "批量朗读" },
-  { route: "tasks", label: "任务" },
+const NAV: { route: Route; label: string; group: string; icon: string }[] = [
+  { route: "gpus", label: "显卡", group: "", icon: "M5 7h14v10H5zM9 4v3M15 4v3M9 17v3M15 17v3M2 10h3M2 14h3M19 10h3M19 14h3" },
+  { route: "tasks", label: "任务", group: "", icon: "M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" },
+  { route: "create", label: "创作", group: "批量工具", icon: "M4 5h16v14H4zM4 15l5-5 4 4 3-3 4 4" },
+  { route: "transcribe", label: "批量转写", group: "批量工具", icon: "M4 6h16M4 10h10M4 14h16M4 18h8" },
+  { route: "dub", label: "批量配音", group: "批量工具", icon: "M12 4a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V7a3 3 0 0 1 3-3zM6 11a6 6 0 0 0 12 0M12 17v3" },
+  { route: "tts", label: "批量朗读", group: "批量工具", icon: "M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2" },
+  { route: "models", label: "模型库", group: "资源", icon: "M12 3l8 4.5v9L12 21l-8-4.5v-9zM12 12l8-4.5M12 12v9M12 12L4 7.5" },
 ];
+
+function NavIcon({ d }: { d: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d={d} />
+    </svg>
+  );
+}
 
 function readRoute(): Route {
   const r = window.location.hash.replace(/^#\/?/, "").split(/[?&]/)[0] as Route;
@@ -49,6 +57,7 @@ export default function Shell({ onLoggedOut }: { onLoggedOut: () => void }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [eventCursor, setEventCursor] = useState<number | null>(null);
   const [menu, setMenu] = useState(false);
+  const [navOpen, setNavOpen] = useState(false);
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [activeTasks, setActiveTasks] = useState<TaskSummary[]>([]);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -77,7 +86,15 @@ export default function Shell({ onLoggedOut }: { onLoggedOut: () => void }) {
     };
   }, [menu]);
 
+  useEffect(() => {
+    if (!navOpen) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setNavOpen(false);
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [navOpen]);
+
   const go = useCallback((r: Route) => {
+    setNavOpen(false);
     window.location.hash = `/${r}`;
     window.scrollTo({ top: 0, behavior: "smooth" });
   }, []);
@@ -295,19 +312,34 @@ export default function Shell({ onLoggedOut }: { onLoggedOut: () => void }) {
 
   return (
     <Ctx.Provider value={ctx}>
-      <div className="app">
-        <header className="topbar">
-          <a className="logo-link" onClick={() => go("gpus")}>
+      <div className={`app ${navOpen ? "nav-open" : ""}`}>
+        <aside className="side">
+          <a className="logo-link" href="#/gpus" onClick={(e) => { e.preventDefault(); go("gpus"); }}>
             <Logo withText />
           </a>
-          <nav className="top-nav">
-            {NAV.map((n) => (
-              <button key={n.route} className={`nav-link ${route === n.route ? "on" : ""}`} onClick={() => go(n.route)}>
-                {n.label}
-                {n.route === "tasks" && activeTasks.length > 0 && <span className="nav-count">{activeTasks.length}</span>}
-              </button>
-            ))}
-          </nav>
+          {["", "批量工具", "资源"].map((group) => (
+            <nav key={group || "main"} className="side-group" aria-label={group || "主导航"}>
+              {group && <span className="side-label">{group}</span>}
+              {NAV.filter((n) => n.group === group).map((n) => (
+                <button key={n.route} className={`nav-link ${route === n.route ? "on" : ""}`} aria-current={route === n.route ? "page" : undefined} onClick={() => go(n.route)}>
+                  <NavIcon d={n.icon} />
+                  {n.label}
+                  {n.route === "tasks" && activeTasks.length > 0 && <span className="nav-count" aria-label={`${activeTasks.length} 个进行中`}>{activeTasks.length}</span>}
+                </button>
+              ))}
+            </nav>
+          ))}
+          <p className="side-foot foot">
+            只在你的电脑上运行，通过 Google 官方 Colab API 管理运行时。与 Google 无关联。
+          </p>
+        </aside>
+        {navOpen && <div className="nav-scrim" onClick={() => setNavOpen(false)} />}
+
+        <div className="main">
+        <header className="topbar">
+          <button className="icon-btn menu-btn" aria-label="打开导航" aria-expanded={navOpen} onClick={() => setNavOpen(true)}>
+            <NavIcon d="M4 7h16M4 12h16M4 17h16" />
+          </button>
           <div className="topbar-right">
             {activeTasks.length > 0 && (
               <button className={`task-badge ${review ? "attention" : ""}`} onClick={() => go("tasks")} title={activeTasks.map((t) => `${t.title} · ${t.stage}`).join("\n")}>
@@ -352,15 +384,6 @@ export default function Shell({ onLoggedOut }: { onLoggedOut: () => void }) {
           </div>
         </header>
 
-        <nav className="mobile-nav">
-          {NAV.map((n) => (
-            <button key={n.route} className={`nav-link ${route === n.route ? "on" : ""}`} onClick={() => go(n.route)}>
-              {n.label}
-              {n.route === "tasks" && activeTasks.length > 0 && <span className="nav-count">{activeTasks.length}</span>}
-            </button>
-          ))}
-        </nav>
-
         <main className="content" key={route}>
           {route === "gpus" && <Gpus />}
           {route === "models" && <Models />}
@@ -369,10 +392,8 @@ export default function Shell({ onLoggedOut }: { onLoggedOut: () => void }) {
           {route === "dub" && <Dub />}
           {route === "tts" && <Tts />}
           {route === "tasks" && <Tasks />}
-          <footer className="foot subtle small">
-            GPUDock 只在你的电脑上运行 · 通过 Google 官方 Colab API 管理运行时 · 与 Google 无关联
-          </footer>
         </main>
+        </div>
 
         <div className="toasts" aria-live="polite">
           {toasts.map((t) => (

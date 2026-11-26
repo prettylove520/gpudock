@@ -4,10 +4,10 @@ export function Logo({ size = 26, withText = false }: { size?: number; withText?
   return (
     <span className="logo">
       <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
-        <rect width="32" height="32" rx="7" fill="var(--ink)" />
-        <rect x="8" y="10" width="16" height="12" rx="2" fill="none" stroke="var(--paper)" strokeWidth="2" />
-        <path d="M11 7v3M16 7v3M21 7v3M11 22v3M16 22v3M21 22v3" stroke="var(--paper)" strokeWidth="1.8" strokeLinecap="round" />
-        <circle cx="16" cy="16" r="2.4" fill="var(--signal)" />
+        <rect width="32" height="32" rx="9" fill="#111" />
+        <rect x="8" y="9.5" width="16" height="13" rx="3" fill="none" stroke="#fff" strokeWidth="1.8" />
+        <path d="M12 6.5v3M20 6.5v3M12 22.5v3M20 22.5v3" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" />
+        <rect x="12" y="13" width="8" height="6" rx="1.5" fill="#45c24e" />
       </svg>
       {withText && <span className="logo-text">GPUDock</span>}
     </span>
@@ -55,7 +55,7 @@ export function ChipArt({ size = 40 }: { size?: number }) {
       ))}
       <rect x="10" y="10" width="40" height="40" rx="5" />
       <rect x="20" y="20" width="20" height="20" rx="2" />
-      <circle cx="30" cy="30" r="3" fill="var(--signal)" stroke="none" />
+      <circle cx="30" cy="30" r="3" fill="var(--accent)" stroke="none" />
     </svg>
   );
 }

@@ -61,10 +61,10 @@ export default function Tts() {
       />
       <div className="two-col">
         <div className="col">
-          <Card title="1. 选择显卡" delay={40}>
+          <Card title="选择显卡" delay={40}>
             <RuntimePicker value={target} onChange={setTarget} minVram={engine === "voxcpm" ? 10 : 2} bigRam={engine === "voxcpm"} suggest={suggest} />
           </Card>
-          <Card title="2. 文字" hint={`${lines.length} / ${MAX_LINES} 行`} delay={80}>
+          <Card title="文字" hint={`${lines.length} / ${MAX_LINES} 行`} delay={80}>
             <textarea className="input textarea" rows={12} value={text} onChange={(e) => setText(e.target.value)} placeholder={`每行一句，空行会被忽略。例如：\n${EXAMPLE}`} />
             {!text && (
               <button type="button" className="link small-link" onClick={() => setText(EXAMPLE)}>
@@ -75,7 +75,7 @@ export default function Tts() {
           </Card>
         </div>
         <div className="col">
-          <Card title="3. 声音" delay={120}>
+          <Card title="声音" delay={120}>
             <Field label="语言">
               <select className="input" value={lang} onChange={(e) => setLang(e.target.value)}>
                 {catalog && Object.entries(catalog.langs).map(([k, v]) => <option key={k} value={k}>{v.name}</option>)}

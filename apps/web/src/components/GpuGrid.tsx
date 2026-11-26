@@ -1,14 +1,7 @@
 import { useState } from "react";
 import type { GpuCardData } from "../types";
-import { hueStyle } from "../hues";
-import { HwImage } from "./Logo";
 
-const GROUPS: { kind: GpuCardData["kind"]; title: string; hint: string }[] = [
-  { kind: "gpu", title: "GPU", hint: "绝大多数 AI 模型都跑在这里" },
-  { kind: "tpu", title: "TPU", hint: "Google 自研芯片，需要 JAX / XLA" },
-  { kind: "cpu", title: "CPU", hint: "不需要显卡的准备工作" },
-];
-
+/** The price board: every accelerator in one table, memory drawn to scale. */
 export default function GpuGrid({
   cards,
   onStart,
@@ -18,26 +11,25 @@ export default function GpuGrid({
   onStart: (card: GpuCardData, shape: string) => void;
   pendingAccels: Set<string>;
 }) {
+  const maxVram = Math.max(1, ...cards.flatMap((c) => c.options.map((o) => o.vram_gb ?? 0)));
   return (
     <div className="hw-groups">
-      {GROUPS.map((g) => {
-        const items = cards.filter((c) => c.kind === g.kind);
-        if (!items.length) return null;
-        return (
-          <div key={g.kind} className="hw-group">
-            <div className="group-head">
-              <span className="group-title">{g.title}</span>
-              <span className="rule" />
-              <span className="subtle small">{g.hint}</span>
-            </div>
-            <div className={`hw-grid ${g.kind === "gpu" ? "" : "compact"}`}>
-              {items.map((c) => (
-                <HwTile key={c.accelerator} card={c} onStart={onStart} pending={pendingAccels.has(c.accelerator)} featured={c.accelerator === "L4"} />
-              ))}
-            </div>
-          </div>
-        );
-      })}
+      <table className="board">
+        <thead>
+          <tr>
+            <th scope="col">加速器</th>
+            <th scope="col" className="num">显存</th>
+            <th scope="col" className="num">单价</th>
+            <th scope="col">能跑什么</th>
+            <th scope="col"><span className="sr-only">启动</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {cards.map((c) => (
+            <Row key={c.accelerator} card={c} maxVram={maxVram} onStart={onStart} pending={pendingAccels.has(c.accelerator)} featured={c.accelerator === "L4"} />
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -45,17 +37,19 @@ export default function GpuGrid({
 function cannotText(card: GpuCardData): string {
   // a T4 can run none of the generation models: say so in two words, not eight names
   if (card.kind === "gpu" && card.can_run.length <= 3 && card.cannot_run.length > 3) return "生图、生视频";
-  const head = card.cannot_run.slice(0, 3).join(" · ");
+  const head = card.cannot_run.slice(0, 3).join("、");
   return card.cannot_run.length > 3 ? `${head} 等 ${card.cannot_run.length} 个` : head;
 }
 
-function HwTile({
+function Row({
   card,
+  maxVram,
   onStart,
   pending,
   featured,
 }: {
   card: GpuCardData;
+  maxVram: number;
   onStart: (card: GpuCardData, shape: string) => void;
   pending: boolean;
   featured: boolean;
@@ -63,66 +57,69 @@ function HwTile({
   const firstEligible = card.options.find((o) => o.eligible) ?? card.options[0];
   const [shape, setShape] = useState(firstEligible.shape);
   const option = card.options.find((o) => o.shape === shape) ?? firstEligible;
-  const memory = card.kind === "cpu" ? "—" : option.vram_gb == null ? "—" : `${option.vram_gb} GB`;
+  const gb = card.kind === "cpu" ? null : option.vram_gb;
+  const short = card.name.replace("NVIDIA ", "");
 
   return (
-    <article className={`hw-tile ${card.eligible ? "" : "locked"} ${featured ? "featured" : ""}`} style={hueStyle(card.accelerator)}>
-      <div className="hw-media">
-        <HwImage accelerator={card.accelerator} />
-        {featured && <span className="stamp">推荐</span>}
-        {!card.eligible && <span className="stamp muted">订阅不可用</span>}
-      </div>
-      <div className="hw-body">
-        <header className="hw-title">
-          <h3>{card.name}</h3>
-          {card.arch && card.arch !== "—" && <span className="mono subtle small">{card.arch}</span>}
-        </header>
-        <p className="subtle small">{card.tagline}</p>
-        <dl className="hw-specs">
-          <div>
-            <dt>{card.kind === "tpu" ? "HBM" : "显存"}</dt>
-            <dd className="big-num">{memory}</dd>
+    <tr className={card.eligible ? "" : "locked"}>
+      <td>
+        <div className="hw-name">
+          {card.name}
+          {featured && card.eligible && <span className="tag on">推荐</span>}
+          {card.kind === "tpu" && <span className="tag">TPU</span>}
+        </div>
+        <div className="hw-sub">{card.eligible ? card.tagline : "当前订阅不可用"}</div>
+      </td>
+      <td className="num cell-vram">
+        <div className="vram">
+          <div className="track" role="img" aria-label={gb == null ? "无显存" : `${gb} GB，最大 ${maxVram} GB`}>
+            <span style={{ width: `${gb == null ? 0 : Math.max(2, (gb / maxVram) * 100)}%` }} />
           </div>
-          <div>
-            <dt>单价</dt>
-            <dd>{option.cu_per_hour == null ? "未公开" : `${option.cu_per_hour} CU/时 · ≈$${(option.cu_per_hour * 0.1).toFixed(2)}`}</dd>
-          </div>
-          {card.can_run.length > 0 && (
-            <div>
-              <dt>能跑</dt>
-              <dd className="can-run">{card.can_run.join(" · ")}</dd>
-            </div>
-          )}
-          {card.cannot_run.length > 0 && (
-            <div>
-              <dt>跑不了</dt>
-              <dd className="cannot-run" title={card.cannot_run.join("、")}>
-                {cannotText(card)}
-              </dd>
-            </div>
-          )}
-        </dl>
-        {card.options.length > 1 && (
-          <div className="seg">
-            {card.options.map((o) => (
-              <button
-                key={o.shape}
-                className={`seg-btn ${o.shape === shape ? "on" : ""}`}
-                disabled={!o.eligible}
-                title={o.eligible ? o.detail : "当前订阅不可用"}
-                onClick={() => setShape(o.shape)}
-              >
-                {o.label}
-              </button>
-            ))}
-          </div>
+          <b>{gb == null ? "—" : gb}{gb != null && <small> GB</small>}</b>
+        </div>
+      </td>
+      <td className="num rate cell-rate">
+        {option.cu_per_hour == null ? (
+          <span>未公开</span>
+        ) : (
+          <>
+            <b>{option.cu_per_hour.toFixed(2)} CU/时</b>
+            <span>≈ ${(option.cu_per_hour * 0.1).toFixed(2)}/时</span>
+          </>
         )}
-        {card.notes && <p className="note small">{card.notes}</p>}
-        <button className={`btn full ${featured ? "primary" : ""}`} disabled={!option.eligible || pending} onClick={() => onStart(card, option.shape)}>
-          {!option.eligible ? "当前订阅不可用" : pending ? "申请中…" : `启动 ${card.name.replace("NVIDIA ", "")}`}
-          {option.eligible && !pending && <span className="arrow">→</span>}
-        </button>
-      </div>
-    </article>
+      </td>
+      <td className="runs">
+        {card.can_run.length > 0 ? <span className="can-run">{card.can_run.join("、")}</span> : <span className="cannot-run">{card.notes || "—"}</span>}
+        {card.can_run.length > 0 && card.cannot_run.length > 0 && <span className="cannot-run" title={card.cannot_run.join("、")}>跑不了 {cannotText(card)}</span>}
+      </td>
+      <td className="cell-start">
+        <div className="start-cell">
+          {card.options.length > 1 && (
+            <div className="seg" role="group" aria-label={`${short} 规格`}>
+              {card.options.map((o) => (
+                <button
+                  key={o.shape}
+                  className={`seg-btn ${o.shape === shape ? "on" : ""}`}
+                  disabled={!o.eligible}
+                  aria-pressed={o.shape === shape}
+                  title={o.eligible ? o.detail : "当前订阅不可用"}
+                  onClick={() => setShape(o.shape)}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          )}
+          <button
+            className={`btn ${featured && option.eligible ? "primary" : ""}`}
+            disabled={!option.eligible || pending}
+            aria-label={`启动 ${short}`}
+            onClick={() => onStart(card, option.shape)}
+          >
+            {!option.eligible ? "不可用" : pending ? "申请中…" : "启动"}
+          </button>
+        </div>
+      </td>
+    </tr>
   );
 }

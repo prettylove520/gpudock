@@ -46,15 +46,15 @@ export default function Transcribe() {
       <PageHead eyebrow="04 / 批量转写 · faster-whisper，99 种语言" title="批量转写" accent="" lede="把一批音频或视频转成带时间轴的字幕和文稿。第一次使用会在运行时上自动部署 Whisper（约 2 分钟）。" />
       <div className="two-col">
         <div className="col">
-          <Card title="1. 选择显卡" delay={40}>
+          <Card title="选择显卡" delay={40}>
             <RuntimePicker value={target} onChange={setTarget} minVram={6} suggest="T4" />
           </Card>
-          <Card title="2. 添加文件" hint="mp3 / wav / m4a / mp4 / mov …" delay={80}>
+          <Card title="添加文件" hint="mp3 / wav / m4a / mp4 / mov …" delay={80}>
             <FileDrop files={files} onChange={setFiles} accept="audio/*,video/*" label="拖入音频或视频" />
           </Card>
         </div>
         <div className="col">
-          <Card title="3. 选项" delay={120}>
+          <Card title="选项" delay={120}>
             <Field label="识别模型">
               <Seg value={model} options={MODELS} onChange={setModel} />
             </Field>

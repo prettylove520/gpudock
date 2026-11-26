@@ -238,7 +238,7 @@ export default function Create() {
       <div className="create-grid">
         <section className="panel rise">
           <div className="panel-head">
-            <h2>1. 选模型</h2>
+            <h2>选模型</h2>
             <Seg
               value={kind}
               onChange={setKind}
@@ -300,7 +300,7 @@ export default function Create() {
             </section>
           )}
 
-          <Card title="2. 选择显卡" hint={model ? `建议 ${model.gpus.join(" / ")}` : undefined} delay={80}>
+          <Card title="选择显卡" hint={model ? `建议 ${model.gpus.join(" / ")}` : undefined} delay={80}>
             <RuntimePicker value={target} onChange={setTarget} minVram={model?.vram_gb ?? 0} gpus={model?.gpus} suggest={suggest} releaseByDefault={false} />
             {!gpuOk && <p className="err-text small">这张卡不在推荐列表里，可能显存或内存不够，建议换 {model?.gpus.join(" / ")}。</p>}
             {realRuntime && status && !downloaded && model && (
@@ -314,7 +314,7 @@ export default function Create() {
             {prefetchId && <TaskPanel taskId={prefetchId} compact onDone={() => setPrefetchId(null)} />}
           </Card>
 
-          <Card title="3. 描述你想要的画面" delay={120}>
+          <Card title="描述你想要的画面" delay={120}>
             {modes.length > 1 && (
               <Field label="模式">
                 <Seg value={mode} onChange={setMode} options={modes.map((m) => ({ value: m, label: catalog?.mode_labels[m] ?? m }))} />

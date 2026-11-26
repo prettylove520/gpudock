@@ -5,14 +5,13 @@ import { hueStyle } from "../hues";
 import type { RuntimeView } from "../types";
 import { vram } from "../util";
 
-export function PageHead({ eyebrow, title, accent, lede }: { eyebrow: string; title: string; accent: string; lede: string }) {
+export function PageHead({ title, lede, children }: { eyebrow?: string; title: string; accent?: string; lede: string; children?: React.ReactNode }) {
   return (
-    <section className="page-head rise">
-      <span className="kicker">{eyebrow}</span>
-      <h1 className="display page-title">
-        {title}
-        {accent}
-      </h1>
+    <section className="page-head">
+      <div className="row-between">
+        <h1>{title}</h1>
+        {children}
+      </div>
       <p className="lede">{lede}</p>
     </section>
   );

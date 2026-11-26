@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { post, ApiError } from "../api";
 import type { AuthStatus, LoginState } from "../types";
-import { ChipArt, Logo, Pic } from "./Logo";
+import { Logo } from "./Logo";
 
 const SPECS: [string, string][] = [
   ["运行位置", "你的电脑 · 127.0.0.1"],
@@ -10,10 +10,13 @@ const SPECS: [string, string][] = [
   ["接入方式", "Google 官方 Colab API"],
 ];
 
-const CALLOUTS = [
-  { label: "T4", value: "15 GB", x: "12%", y: "20%" },
-  { label: "L4", value: "22.5 GB", x: "64%", y: "12%" },
-  { label: "H100", value: "80 GB", x: "70%", y: "74%" },
+// The same figures as the price board in the app (server/catalog.py).
+const BOARD = [
+  { name: "NVIDIA T4", vram: 15, rate: 1.19 },
+  { name: "NVIDIA L4", vram: 22.5, rate: 1.71 },
+  { name: "NVIDIA A100", vram: 40, rate: 5.4 },
+  { name: "A100 80GB", vram: 80, rate: 7.52 },
+  { name: "RTX PRO 6000", vram: 96, rate: 8.71 },
 ];
 
 export default function Login({ auth, onChange }: { auth: AuthStatus; onChange: () => void }) {
@@ -39,12 +42,11 @@ export default function Login({ auth, onChange }: { auth: AuthStatus; onChange: 
     <div className="landing">
       <header className="landing-nav">
         <Logo withText />
-        <span className="mono subtle small">开源 · Apache-2.0</span>
+        <span className="subtle small">开源 · Apache-2.0</span>
       </header>
 
       <main className="landing-main">
         <section className="landing-copy rise">
-          <span className="kicker">GPUDock / Colab 显卡控制台</span>
           <h1 className="display">
             把 Colab 的显卡
             <br />
@@ -92,17 +94,30 @@ export default function Login({ auth, onChange }: { auth: AuthStatus; onChange: 
           </dl>
         </section>
 
-        <figure className="landing-visual rise" style={{ animationDelay: "80ms" }}>
-          <div className="plate">
-            <Pic src="/img/hero.webp" className="hero-pic" fallback={<ChipArt size={180} />} />
-            {CALLOUTS.map((c) => (
-              <span key={c.label} className="callout-pin" style={{ left: c.x, top: c.y }}>
-                <i />
-                <b>{c.label}</b> {c.value}
-              </span>
-            ))}
+        <figure className="landing-visual">
+          <div className="plate ui-preview" data-ui>
+            <div className="ui-head">
+              <b>价目表</b>
+              <span>1 CU ≈ $0.10</span>
+            </div>
+            <table className="board">
+              <tbody>
+                {BOARD.map((r) => (
+                  <tr key={r.name}>
+                    <td><div className="hw-name">{r.name}</div></td>
+                    <td className="num">
+                      <div className="vram">
+                        <div className="track"><span style={{ width: `${(r.vram / 96) * 100}%` }} /></div>
+                        <b>{r.vram}<small> GB</small></b>
+                      </div>
+                    </td>
+                    <td className="num rate"><b>{r.rate.toFixed(2)} CU/时</b></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-          <figcaption className="mono small subtle">图 1 — 数据中心加速卡。显卡在 Google 的机房里，控制台在你的电脑上。</figcaption>
+          <figcaption className="small subtle">登录后，这些卡按你的 Colab 订阅开放，单价按小时计。</figcaption>
         </figure>
       </main>
     </div>
