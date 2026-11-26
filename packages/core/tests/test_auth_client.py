@@ -1,4 +1,5 @@
 import json
+import os
 import stat
 
 import pytest
@@ -67,14 +68,17 @@ def test_install_client_rejects_web_clients_and_sets_private_mode(tmp_path):
         auth.install_client(str(web))
 
     dest = auth.install_client(str(client_json(tmp_path, "ok")))
-    assert stat.S_IMODE(dest.stat().st_mode) == 0o600
+    if os.name != "nt":  # Windows has no POSIX mode bits; the profile ACL keeps it private
+        assert stat.S_IMODE(dest.stat().st_mode) == 0o600
 
 
 def test_token_store_file_fallback_is_private(tmp_path):
     store = auth.TokenStore()
     where = store.save('{"refresh_token": "1//x"}')
     path = tmp_path / "home" / "token.json"
-    assert where == str(path) and stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert where == str(path)
+    if os.name != "nt":
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert store.load() == '{"refresh_token": "1//x"}'
     store.clear()
     assert store.load() is None

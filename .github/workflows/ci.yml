@@ -23,6 +23,21 @@ jobs:
       - name: Tests (local Jupyter stands in for the Colab runtime)
         run: uv run pytest -q
 
+  core-windows:
+    # GPUDock is a desktop app, so the local side must also pass on Windows.
+    # Tests marked posix_runtime are skipped there (Colab runtimes are Linux).
+    name: Python core (tests, Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: packages/core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync
+      - name: Tests
+        run: uv run pytest -q
+
   web:
     name: Web UI (typecheck + build)
     runs-on: ubuntu-latest

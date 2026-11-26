@@ -129,6 +129,7 @@ def test_install_marks_recipe(env):
     assert "kokoro" in client.get(f"/api/runtimes/{rid}/agent?refresh=true").json()["installed"]
 
 
+@pytest.mark.posix_runtime
 def test_batch_transcribe(env):
     client, tasks, rid, tmp = env
     ids = upload(client, media(tmp / "talk one.wav", video=False), media(tmp / "talk2.mp4", video=True))
@@ -166,6 +167,7 @@ def test_voice_cloning_requires_consent(env):
     assert r.status_code == 400 and "授权" in r.json()["error"]
 
 
+@pytest.mark.posix_runtime
 def test_dub_video_with_review(env):
     client, tasks, rid, tmp = env
     ids = upload(client, media(tmp / "clip.mp4", video=True, seconds=6))
@@ -189,6 +191,7 @@ def test_dub_video_with_review(env):
     assert "Hello there, edited.\n第1句测试内容" in bi
 
 
+@pytest.mark.posix_runtime
 def test_dub_cancel_while_waiting_for_review(env):
     client, _, rid, tmp = env
     ids = upload(client, media(tmp / "a.wav", video=False, seconds=4))
@@ -218,6 +221,7 @@ def test_external_translator(env):
     assert "sk-test" not in client.get("/api/translator").text
 
 
+@pytest.mark.posix_runtime
 def test_dub_shortens_lines_that_do_not_fit(env):
     client, tasks, rid, tmp = env
     ids = upload(client, media(tmp / "long.mp4", video=True, seconds=6))
@@ -259,6 +263,7 @@ def _png(path):
     return path
 
 
+@pytest.mark.posix_runtime
 def test_generate_image_and_video(env):
     client, _, rid, tmp = env
     t = client.post(
@@ -301,6 +306,7 @@ def test_generate_validation(env):
     assert r.status_code == 400 and "Hugging Face" in r.json()["error"]
 
 
+@pytest.mark.posix_runtime
 def test_generate_keeps_hf_token_off_disk(env, fake_runtime):
     client, _, rid, _ = env
     _, root = fake_runtime
@@ -318,6 +324,7 @@ def test_generate_keeps_hf_token_off_disk(env, fake_runtime):
     client.put("/api/hf-token", json={"token": ""})
 
 
+@pytest.mark.posix_runtime
 def test_auto_runtime_is_shared_and_released_after_the_last_task(env):
     client, tasks, _, tmp = env
     fake = tasks.m.api
@@ -339,6 +346,7 @@ def test_auto_runtime_is_shared_and_released_after_the_last_task(env):
     assert later, "one of the tasks should log the release"
 
 
+@pytest.mark.posix_runtime
 def test_retry_skips_known_uploads_and_applies_overrides(env):
     client, _, rid, _ = env
     t = client.post(
@@ -359,6 +367,7 @@ def test_retry_skips_known_uploads_and_applies_overrides(env):
     assert any("跳过" in line for line in retried["logs"]), retried["logs"]
 
 
+@pytest.mark.posix_runtime
 def test_dub_retry_reuses_the_reviewed_translation(env):
     client, _, rid, tmp = env
     ids = upload(client, media(tmp / "re.wav", video=False, seconds=4))
@@ -392,6 +401,7 @@ def test_tts_rejects_too_many_lines(env):
     assert r.status_code == 400 and "500" in r.json()["error"]
 
 
+@pytest.mark.posix_runtime
 def test_restart_stops_the_orphaned_worker_command(env, fake_runtime):
     client, tasks, rid, tmp = env
     url, root = fake_runtime

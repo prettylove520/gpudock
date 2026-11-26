@@ -114,6 +114,7 @@ def test_eval_json(kernel):
     assert kernel.eval_json("{'a': [1, 2], 'b': x}", setup="x = 'y'") == {"a": [1, 2], "b": "y"}
 
 
+@pytest.mark.posix_runtime
 def test_interrupt(conn, kernel):
     msg_id = kernel.send_execute("import time; time.sleep(30)")
     time.sleep(1.0)

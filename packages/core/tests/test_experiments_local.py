@@ -51,6 +51,7 @@ class FakeApi:
         self.live.pop(name, None)
 
 
+@pytest.mark.posix_runtime
 def test_e2e_creates_works_and_releases(jupyter, tmp_path):
     url, root = jupyter
     api = FakeApi(url)
