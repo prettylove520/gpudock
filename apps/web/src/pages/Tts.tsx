@@ -1,17 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
-import { post } from "../api";
-import { useApp } from "../ctx";
-import type { TaskDetail } from "../types";
+import { useApp, type Target } from "../ctx";
 import { Card, Field, FileDrop, PageHead, RuntimePicker, Seg, Toggle, type PickedFile } from "../components/common";
 import TaskPanel from "../components/TaskPanel";
 import { useStoredTask } from "./shared";
 
 type Engine = "kokoro" | "voxcpm";
+const MAX_LINES = 500;
+const EXAMPLE = "欢迎使用 GPUDock，这是第一句。\n每一行都会生成一个独立的音频文件。";
 
 export default function Tts() {
-  const { catalog, handle } = useApp();
-  const [runtime, setRuntime] = useState<string | null>(null);
-  const [text, setText] = useState("欢迎使用 GPUDock，这是第一句。\n每一行都会生成一个独立的音频文件。");
+  const { catalog, submitTask } = useApp();
+  const [target, setTarget] = useState<Target>({ runtime: null, release: true });
+  const [text, setText] = useState("");
   const [engine, setEngine] = useState<Engine>("kokoro");
   const [lang, setLang] = useState("zh");
   const [voice, setVoice] = useState("");
@@ -35,20 +35,21 @@ export default function Tts() {
   const refReady = ref.find((f) => f.status === "done");
   const cloneOk = engine === "kokoro" || !refReady || consent;
 
+  const suggest = engine === "voxcpm" ? "L4" : "T4";
+  const tooMany = lines.length > MAX_LINES;
+
   async function run(kind: "tts" | "tts_preview") {
-    if (!runtime) return;
-    try {
-      const t = await post<TaskDetail>("/api/tasks", {
-        kind,
-        runtime,
-        params: { engine, lang, voice, speed, merge, consent, text: kind === "tts_preview" ? lines[0] : text },
-        uploads: engine === "voxcpm" && refReady?.id ? [refReady.id] : [],
-      });
-      if (kind === "tts") setTaskId(t.id);
-      else setPreviewId(t.id);
-    } catch (e) {
-      handle(e);
-    }
+    // a preview should not release the card you are about to use for the real run
+    const t = await submitTask({
+      kind,
+      target: kind === "tts_preview" ? { ...target, release: false } : target,
+      accelerator: suggest,
+      params: { engine, lang, voice, speed, merge, consent, text: kind === "tts_preview" ? lines[0] : text },
+      uploads: engine === "voxcpm" && refReady?.id ? [refReady.id] : [],
+    });
+    if (!t) return;
+    if (kind === "tts") setTaskId(t.id);
+    else setPreviewId(t.id);
   }
 
   return (
@@ -61,10 +62,16 @@ export default function Tts() {
       <div className="two-col">
         <div className="col">
           <Card title="1. 选择显卡" delay={40}>
-            <RuntimePicker value={runtime} onChange={setRuntime} minVram={engine === "voxcpm" ? 10 : 2} bigRam={engine === "voxcpm"} suggest={engine === "voxcpm" ? "L4" : "T4"} />
+            <RuntimePicker value={target} onChange={setTarget} minVram={engine === "voxcpm" ? 10 : 2} bigRam={engine === "voxcpm"} suggest={suggest} />
           </Card>
-          <Card title="2. 文字" hint={`${lines.length} 行`} delay={80}>
-            <textarea className="input textarea" rows={12} value={text} onChange={(e) => setText(e.target.value)} placeholder="每行一句，空行会被忽略" />
+          <Card title="2. 文字" hint={`${lines.length} / ${MAX_LINES} 行`} delay={80}>
+            <textarea className="input textarea" rows={12} value={text} onChange={(e) => setText(e.target.value)} placeholder={`每行一句，空行会被忽略。例如：\n${EXAMPLE}`} />
+            {!text && (
+              <button type="button" className="link small-link" onClick={() => setText(EXAMPLE)}>
+                填入示例
+              </button>
+            )}
+            {tooMany && <p className="err-text small">一次最多 {MAX_LINES} 行，现在有 {lines.length} 行，请分成几批提交。</p>}
           </Card>
         </div>
         <div className="col">
@@ -107,10 +114,10 @@ export default function Tts() {
             </Field>
             <Toggle checked={merge} onChange={setMerge} label="额外合并成一个完整音频" />
             <div className="row-gap">
-              <button className="btn ghost" disabled={!runtime || !lines.length || !cloneOk} onClick={() => run("tts_preview")}>
+              <button className="btn ghost" disabled={!target.runtime || !lines.length || !cloneOk} onClick={() => run("tts_preview")}>
                 试听第一句
               </button>
-              <button className="btn primary" disabled={!runtime || !lines.length || !cloneOk} onClick={() => run("tts")}>
+              <button className="btn primary" disabled={!target.runtime || !lines.length || !cloneOk || tooMany} onClick={() => run("tts")}>
                 生成 {lines.length} 段音频 <span className="arrow">→</span>
               </button>
             </div>
@@ -120,7 +127,7 @@ export default function Tts() {
       </div>
       {taskId && (
         <Card title="任务进度" delay={0}>
-          <TaskPanel taskId={taskId} />
+          <TaskPanel taskId={taskId} onRetried={(t) => setTaskId(t.id)} />
         </Card>
       )}
     </>

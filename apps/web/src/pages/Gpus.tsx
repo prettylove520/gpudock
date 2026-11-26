@@ -2,7 +2,7 @@ import { del } from "../api";
 import { useApp, type Route } from "../ctx";
 import { hueStyle } from "../hues";
 import type { GpuCardData, RuntimeView } from "../types";
-import { duration, tierLabel, vram } from "../util";
+import { cu, duration, tierLabel, vram } from "../util";
 import { ChipArt, HwImage, Pic } from "../components/Logo";
 import { PageHead } from "../components/common";
 import GpuGrid from "../components/GpuGrid";
@@ -16,15 +16,23 @@ const FEATURES: { route: Route; img: string; title: string; desc: string }[] = [
 ];
 
 export default function Gpus() {
-  const { account, specs, specsError, data, runtimes, selected, setSelected, reloadRuntimes, toast, handle, startRuntime, go } = useApp();
+  const { account, specs, specsError, data, runtimes, selected, setSelected, reloadRuntimes, toast, handle, startRuntime, go, confirm } = useApp();
   const pending = data?.pending ?? [];
   const current = runtimes.find((r) => r.id === selected) ?? null;
   const pendingAccels = new Set(pending.map((p) => p.accelerator));
-  const spend = runtimes.reduce((s, r) => s + (r.est_cu ?? 0), 0);
+  const usage = data?.usage;
   const eligibleCount = specs?.filter((c) => c.eligible).length ?? 0;
 
   async function release(rt: RuntimeView) {
-    if (!window.confirm(`释放 ${rt.display_name}？\n运行时里的文件、已部署的模型和变量都会丢失，计费随即停止。`)) return;
+    const ok = await confirm({
+      title: `释放 ${rt.display_name}？`,
+      body: rt.busy_task
+        ? "它正在执行任务，释放后任务会失败。运行时里的文件、已部署的模型和变量都会丢失，计费随即停止。"
+        : "运行时里的文件、已部署的模型和变量都会丢失，计费随即停止。已经下载到本机的结果不受影响。",
+      ok: "释放",
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await del(`/api/runtimes/${rt.id}`);
       toast("success", `${rt.display_name} 已释放，计费已停止。`);
@@ -43,10 +51,11 @@ export default function Gpus() {
           <dt>运行中</dt>
           <dd>{runtimes.length + pending.length}</dd>
         </div>
-        <div>
-          <dt>本次估算花费</dt>
+        <div title="按显卡运行时长和社区实测单价估算，只算 GPUDock 开的卡">
+          <dt>今天 / 本月花费</dt>
           <dd>
-            {spend ? spend.toFixed(2) : "0"} <small>CU</small>
+            {usage ? usage.today_cu.toFixed(1) : "—"}
+            <small> / {usage ? cu(usage.month_cu) : "—"}</small>
           </dd>
         </div>
         <div>
@@ -116,7 +125,16 @@ export default function Gpus() {
                 key={rt.id}
                 className={`rack-row ${rt.id === selected ? "selected" : ""}`}
                 style={hueStyle(rt.accelerator)}
+                role="button"
+                tabIndex={0}
+                aria-pressed={rt.id === selected}
                 onClick={() => setSelected(rt.id)}
+                onKeyDown={(e) => {
+                  if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+                    e.preventDefault();
+                    setSelected(rt.id);
+                  }
+                }}
               >
                 <HwImage accelerator={rt.accelerator} className="rack-pic" />
                 <div className="rack-info">
@@ -129,6 +147,7 @@ export default function Gpus() {
                         Colab 网页
                       </span>
                     )}
+                    {rt.auto && <span className="tag" title="提交任务时自动申请的">自动申请</span>}
                   </div>
                   <dl className="rack-meta">
                     <div>
@@ -184,7 +203,7 @@ export default function Gpus() {
       <section className="block rise" style={{ animationDelay: "160ms" }}>
         <div className="block-head">
           <h2>启动新的显卡</h2>
-          <span className="subtle small">单价为社区实测估算（1 CU ≈ $0.10），以 Colab 实际计费为准</span>
+          <span className="subtle small">单价为社区实测估算（1 CU ≈ $0.10），以 Colab 实际计费为准。其实不用先开卡：在各功能页选“自动”，提交时会自动申请。</span>
         </div>
         {specs ? (
           <GpuGrid cards={specs} onStart={(card: GpuCardData, shape: string) => startRuntime(card.accelerator, shape, card.name)} pendingAccels={pendingAccels} />

@@ -9,6 +9,7 @@ import socket
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import httpx
 import pytest
@@ -315,3 +316,95 @@ def test_generate_keeps_hf_token_off_disk(env, fake_runtime):
     assert leaked == []
     assert secret not in json.dumps(client.get("/api/tasks").json())
     client.put("/api/hf-token", json={"token": ""})
+
+
+def test_auto_runtime_is_shared_and_released_after_the_last_task(env):
+    client, tasks, _, tmp = env
+    fake = tasks.m.api
+    ids = upload(client, media(tmp / "talk.wav", video=False, seconds=3))
+    body = {"kind": "transcribe", "runtime": "auto", "accelerator": "L4", "release_after": True, "params": {"formats": ["srt"]}, "uploads": ids}
+    first = client.post("/api/tasks", json=body).json()
+    second = client.post("/api/tasks", json=body).json()
+    a, b = wait_task(client, first["id"]), wait_task(client, second["id"])
+    assert a["status"] == b["status"] == "done", (a["logs"][-6:], b["logs"][-6:])
+    assert a["runtime"] == b["runtime"] and a["runtime"].startswith("runtimes/gpudock-")
+    assert a["accelerator"] == "L4" and a["est_cu"] is not None
+    # released once, after the second task; the user's own runtime is never touched
+    wait_for_release = time.time() + 10
+    while a["runtime"] not in fake.deleted and time.time() < wait_for_release:
+        time.sleep(0.2)
+    assert fake.deleted.count(a["runtime"]) == 1
+    assert "runtimes/users-own-notebook" in fake.live
+    later = [t for t in (a, b) if any("释放" in line for line in t["logs"])]
+    assert later, "one of the tasks should log the release"
+
+
+def test_retry_skips_known_uploads_and_applies_overrides(env):
+    client, _, rid, _ = env
+    t = client.post(
+        "/api/tasks",
+        json={"kind": "generate", "runtime": rid, "params": {"model": "z_image_turbo", "mode": "t2i", "prompt": "橘猫", "width": 1024, "height": 1024, "seed": 3}},
+    ).json()
+    done = wait_task(client, t["id"])
+    assert done["can_retry"] and done["gen"]["prompt"] == "橘猫" and done["result"]["gen_seconds"] is not None
+    again = client.post(f"/api/tasks/{t['id']}/retry", json={"overrides": {"seed": 9}}).json()
+    again = wait_task(client, again["id"])
+    assert again["status"] == "done" and again["retry_of"] == t["id"] and again["result"]["seed"] == 9
+
+    tmp = Path(done["out_dir"]).parent
+    ids = upload(client, media(tmp / "same.wav", video=False, seconds=2))
+    first = wait_task(client, client.post("/api/tasks", json={"kind": "transcribe", "runtime": rid, "params": {}, "uploads": ids}).json()["id"])
+    retried = wait_task(client, client.post(f"/api/tasks/{first['id']}/retry", json={}).json()["id"])
+    assert retried["status"] == "done"
+    assert any("跳过" in line for line in retried["logs"]), retried["logs"]
+
+
+def test_dub_retry_reuses_the_reviewed_translation(env):
+    client, _, rid, tmp = env
+    ids = upload(client, media(tmp / "re.wav", video=False, seconds=4))
+    params = {"src_lang": "zh", "tgt_lang": "en", "translator": "runtime", "voice_mode": "preset", "voice": "af_heart", "keep_bgm": False, "review": True}
+    t = client.post("/api/tasks", json={"kind": "dub", "runtime": rid, "params": params, "uploads": ids}).json()
+    wait_task(client, t["id"], until=("waiting_review", "error"))
+    client.post(f"/api/tasks/{t['id']}/review", json={"edits": {"re.wav": [{"id": 1, "text": "Edited by hand."}]}})
+    assert wait_task(client, t["id"])["status"] == "done"
+    again = wait_task(client, client.post(f"/api/tasks/{t['id']}/retry", json={}).json()["id"], until=("done", "error", "waiting_review"))
+    assert again["status"] == "done", again["logs"][-8:]
+    assert any("沿用上次" in line for line in again["logs"])
+    assert "Edited by hand." in client.get(f"/api/tasks/{again['id']}/files/re.dubbed.srt").text
+
+
+def test_signed_file_urls_stream_without_the_token(env):
+    client, _, rid, _ = env
+    t = client.post("/api/tasks", json={"kind": "tts", "runtime": rid, "params": {"text": "第一句\n第二句", "merge": False}}).json()
+    done = wait_task(client, t["id"])
+    url = done["outputs"][0]["url"]
+    bare = TestClient(client.app)
+    r = bare.get(url, headers={"Range": "bytes=0-9"})
+    assert r.status_code == 206 and len(r.content) == 10
+    assert bare.get(url.replace("sig=", "sig=x")).status_code == 403
+    assert bare.get(url + "&download=1").headers["content-disposition"].startswith("attachment")
+
+
+def test_tts_rejects_too_many_lines(env):
+    client, _, rid, _ = env
+    text = "\n".join(f"第 {i} 行" for i in range(501))
+    r = client.post("/api/tasks", json={"kind": "tts", "runtime": rid, "params": {"text": text}})
+    assert r.status_code == 400 and "500" in r.json()["error"]
+
+
+def test_restart_stops_the_orphaned_worker_command(env, fake_runtime):
+    client, tasks, rid, tmp = env
+    url, root = fake_runtime
+    handle = tasks.m.handle(rid)
+    kernel = handle.kernel(handle.WORKER)
+    kernel.send_execute("import time; time.sleep(120)")
+    time.sleep(1.5)
+    # a new GPUDock process: it must not queue behind the orphan
+    fresh = Manager(config_dir=tmp / "home", api_factory=lambda: tasks.m.api, runtime_fs_root=str(root))
+    try:
+        started = time.time()
+        status = TaskManager(fresh, root=tmp / "ws").runtime_status(rid, refresh=True)
+        assert status.get("agent") and time.time() - started < 30
+        assert fresh.handle(rid).orphan_interrupted
+    finally:
+        fresh.stop()

@@ -27,7 +27,8 @@ export default function Console({
   const [code, setCode] = useState(() => localStorage.getItem(storeKey) ?? SNIPPETS[0].code);
   const [execId, setExecId] = useState<string | null>(runtime.busy_exec);
   const [exec, setExec] = useState<ExecView | null>(null);
-  const [chunks, setChunks] = useState<Chunk[]>([]);
+  const [chunks, setChunks] = useState<Segment[]>([]);
+  const [clipped, setClipped] = useState(false);
   const [stats, setStats] = useState<Stats | null>(null);
   const [now, setNow] = useState(Date.now() / 1000);
   const outRef = useRef<HTMLPreElement>(null);
@@ -43,7 +44,13 @@ export default function Console({
       try {
         const v = await api<ExecView>(`/api/execs/${execId}?since=${nextRef.current}`);
         nextRef.current = v.next;
-        if (v.chunks.length) setChunks((c) => [...c, ...v.chunks]);
+        if (v.truncated) setClipped(true);
+        if (v.chunks.length)
+          setChunks((c) => {
+            const next = appendChunks(c, v.chunks);
+            if (next.dropped) setClipped(true);
+            return next.segments;
+          });
         setExec(v);
         setNow(Date.now() / 1000);
         if (v.status !== "running") onChanged();
@@ -73,6 +80,7 @@ export default function Console({
     try {
       nextRef.current = 0;
       setChunks([]);
+      setClipped(false);
       setExec(null);
       const v = await post<ExecView>(`/api/runtimes/${runtime.id}/exec`, { code });
       setExecId(v.id);
@@ -169,13 +177,14 @@ export default function Console({
       </div>
 
       <pre ref={outRef} className={`output ${chunks.length ? "" : "empty-out"}`}>
+        {clipped && <span className="out-system">（较早的输出太长，已省略）{"\n"}</span>}
         {chunks.length === 0
           ? running
             ? "等待输出…"
             : "输出会显示在这里。"
           : chunks.map((c) => (
-              <span key={c.i} className={`out-${c.kind}`}>
-                {stripAnsi(c.text)}
+              <span key={c.key} className={`out-${c.kind}`}>
+                {c.text.replace(/\r/g, "")}
                 {c.kind === "result" ? "\n" : ""}
               </span>
             ))}
@@ -211,7 +220,67 @@ function Meter({ label, value, max, unit }: { label: string; value: number | nul
 }
 
 // eslint-disable-next-line no-control-regex
-const ANSI = /\x1b\[[0-9;]*m/g;
+const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
 function stripAnsi(s: string): string {
   return s.replace(ANSI, "");
+}
+
+/** Output kept on screen: consecutive chunks of one kind merged into one run of text. */
+interface Segment {
+  key: number;
+  kind: Chunk["kind"];
+  text: string;
+}
+
+const MAX_CHARS = 300_000;
+
+/**
+ * A carriage return moves back to the start of the line: progress bars (tqdm,
+ * pip, curl) redraw themselves that way. Keep only the latest drawing of each
+ * line, so a download does not print thousands of lines.
+ */
+function collapseCR(text: string): string {
+  return text
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => {
+      if (!line.includes("\r")) return line;
+      const parts = line.split("\r");
+      let last = parts.pop() ?? "";
+      while (last === "" && parts.length) last = parts.pop() ?? "";
+      return line.endsWith("\r") ? `${last}\r` : last;
+    })
+    .join("\n");
+}
+
+function appendChunks(segments: Segment[], chunks: Chunk[]): { segments: Segment[]; dropped: boolean } {
+  const out = segments.slice();
+  for (const c of chunks) {
+    const text = stripAnsi(c.text);
+    const last = out[out.length - 1];
+    if (last && last.kind === c.kind && c.kind !== "result") {
+      // only the last line of what is already there can still be redrawn
+      const cut = last.text.lastIndexOf("\n") + 1;
+      out[out.length - 1] = { ...last, text: last.text.slice(0, cut) + collapseCR(last.text.slice(cut) + text) };
+    } else {
+      out.push({ key: c.i, kind: c.kind, text: collapseCR(text) });
+    }
+  }
+  let size = out.reduce((n, sgm) => n + sgm.text.length, 0);
+  let dropped = false;
+  while (size > MAX_CHARS && out.length) {
+    const first = out[0];
+    const over = size - MAX_CHARS;
+    dropped = true;
+    if (first.text.length <= over || out.length > 1 && first.text.length < 2000) {
+      out.shift();
+      size -= first.text.length;
+    } else {
+      const cut = first.text.indexOf("\n", over);
+      const keep = cut >= 0 ? first.text.slice(cut + 1) : first.text.slice(over);
+      size -= first.text.length - keep.length;
+      out[0] = { ...first, text: keep };
+    }
+  }
+  return { segments: out, dropped };
 }

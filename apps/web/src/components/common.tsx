@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { uploadFiles } from "../api";
-import { useApp } from "../ctx";
+import { useApp, type Target } from "../ctx";
 import { hueStyle } from "../hues";
+import type { RuntimeView } from "../types";
 import { vram } from "../util";
 
 export function PageHead({ eyebrow, title, accent, lede }: { eyebrow: string; title: string; accent: string; lede: string }) {
@@ -55,78 +56,114 @@ export function Seg<T extends string>({ value, options, onChange }: { value: T; 
 
 export function Toggle({ checked, onChange, label, hint }: { checked: boolean; onChange: (v: boolean) => void; label: string; hint?: string }) {
   return (
-    <label className="toggle-row">
-      <span className={`toggle ${checked ? "on" : ""}`} onClick={() => onChange(!checked)} role="switch" aria-checked={checked}>
+    <div className="toggle-row">
+      <button type="button" className={`toggle ${checked ? "on" : ""}`} onClick={() => onChange(!checked)} role="switch" aria-checked={checked} aria-label={label}>
         <i />
-      </span>
-      <span>
+      </button>
+      <span onClick={() => onChange(!checked)}>
         <span className="toggle-label">{label}</span>
         {hint && <span className="field-hint block">{hint}</span>}
       </span>
-    </label>
+    </div>
   );
 }
 
-/** Choose which running runtime a job goes to; offers to start one if none. */
+/**
+ * Where a task runs: one of the running runtimes, or "自动" — reuse a running
+ * GPUDock runtime of the suggested kind, else start one when the task is
+ * submitted. Optionally release the runtime when the task is done.
+ */
 export function RuntimePicker({
   value,
   onChange,
   minVram = 0,
   suggest = "T4",
+  gpus,
   bigRam = false,
+  allowAuto = true,
+  releaseByDefault = true,
 }: {
-  value: string | null;
-  onChange: (id: string) => void;
+  value: Target;
+  onChange: (t: Target) => void;
   minVram?: number;
   suggest?: string;
+  gpus?: string[];
   bigRam?: boolean;
+  allowAuto?: boolean;
+  releaseByDefault?: boolean;
 }) {
-  const { runtimes, data, selected, startRuntime, go } = useApp();
+  const { runtimes, data, selected, specs, go } = useApp();
   const pending = data?.pending ?? [];
+  const fits = (r: RuntimeView) =>
+    (!minVram || r.vram_gb == null || r.vram_gb >= minVram) && (!gpus || gpus.includes(r.accelerator)) && !(bigRam && ["T4", "NONE"].includes(r.accelerator) && r.shape !== "SHAPE_HIGHMEM");
+  const card = specs?.find((c) => c.accelerator === suggest);
+  const rate = card?.options[0]?.cu_per_hour;
 
   useEffect(() => {
-    if (value && runtimes.some((r) => r.id === value)) return;
-    const pick = runtimes.find((r) => r.id === selected) ?? runtimes[0];
-    if (pick) onChange(pick.id);
-  }, [runtimes, selected, value, onChange]);
+    if (!data) return; // decide once the runtime list has loaded
+    if (value.runtime === "auto" && allowAuto) return;
+    if (value.runtime && runtimes.some((r) => r.id === value.runtime)) return;
+    const pick = runtimes.find((r) => r.id === selected && fits(r)) ?? runtimes.find(fits);
+    if (pick) onChange({ runtime: pick.id, release: false });
+    else if (allowAuto) onChange({ runtime: "auto", release: releaseByDefault });
+    else if (runtimes[0]) onChange({ runtime: runtimes[0].id, release: false });
+    else if (value.runtime) onChange({ runtime: null, release: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, runtimes, selected, value.runtime, allowAuto, suggest, minVram]);
 
-  if (runtimes.length === 0) {
+  if (!allowAuto && runtimes.length === 0) {
     return (
       <div className="runtime-empty">
         <div>
           <b>{pending.length ? "显卡申请中…" : "还没有运行中的显卡"}</b>
-          <p className="subtle small">
-            {pending.length ? "拿到后会自动出现在这里。" : suggest === "T4" ? `这个任务建议至少 ${minVram || 15} GB 显存，T4 就够用。` : `这个任务建议至少 ${minVram || 15} GB 显存，推荐 ${suggest}。`}
-          </p>
+          <p className="subtle small">{pending.length ? "拿到后会自动出现在这里。" : "先在“显卡”页启动一张。"}</p>
         </div>
-        {!pending.length && (
-          <div className="row-gap">
-            <button className="btn primary" onClick={() => startRuntime(suggest, "SHAPE_STANDARD", `NVIDIA ${suggest}`)}>
-              启动 {suggest} <span className="arrow">→</span>
-            </button>
-            <button className="btn ghost" onClick={() => go("gpus")}>选择其他显卡</button>
-          </div>
-        )}
+        {!pending.length && <button className="btn ghost" onClick={() => go("gpus")}>去启动显卡</button>}
         {pending.length > 0 && <div className="spinner" />}
       </div>
     );
   }
 
+  const current = runtimes.find((r) => r.id === value.runtime);
+  const canRelease = value.runtime === "auto" || !!current?.owned;
+  const pendingSame = pending.find((j) => j.accelerator === suggest);
+
   return (
-    <div className="runtime-pick">
-      {runtimes.map((r) => {
-        const low = minVram > 0 && r.vram_gb != null && r.vram_gb < minVram;
-        const smallRam = bigRam && ["T4", "NONE"].includes(r.accelerator) && r.shape !== "SHAPE_HIGHMEM";
-        return (
-          <button key={r.id} type="button" className={`rt-chip ${value === r.id ? "on" : ""}`} style={hueStyle(r.accelerator)} onClick={() => onChange(r.id)}>
+    <div className="picker">
+      <div className="runtime-pick">
+        {allowAuto && (
+          <button type="button" className={`rt-chip auto-chip ${value.runtime === "auto" ? "on" : ""}`} style={hueStyle(suggest)} onClick={() => onChange({ runtime: "auto", release: releaseByDefault })}>
+            <span className="auto-mark">AUTO</span>
+            <b>自动 · {suggest}</b>
+            <span className="subtle small">{rate != null ? `约 ${rate} CU/时` : "按需申请"}</span>
+          </button>
+        )}
+        {runtimes.map((r) => (
+          <button key={r.id} type="button" className={`rt-chip ${value.runtime === r.id ? "on" : ""}`} style={hueStyle(r.accelerator)} onClick={() => onChange({ runtime: r.id, release: false })}>
             <span className={`pulse-dot ${r.busy ? "busy" : "ok"}`} />
             <b>{r.display_name}</b>
             <span className="subtle small">{vram(r.vram_gb)}{r.busy ? " · 忙碌" : ""}</span>
-            {low && <span className="tag warn-tag">显存可能不够</span>}
-            {smallRam && <span className="tag warn-tag">内存不够克隆</span>}
+            {!fits(r) && <span className="tag warn-tag">{bigRam && r.accelerator === "T4" ? "内存不够克隆" : "可能跑不动"}</span>}
           </button>
-        );
-      })}
+        ))}
+      </div>
+      {value.runtime === "auto" && (
+        <p className="subtle small">
+          {runtimes.some((r) => r.owned && r.accelerator === suggest)
+            ? `会直接用正在运行的 ${suggest}。`
+            : pendingSame
+              ? `${suggest} 正在申请中，拿到后自动开始。`
+              : `提交后自动申请一张 ${suggest}（通常 1–3 分钟，没货会排队重试），拿到就开始。`}
+        </p>
+      )}
+      {canRelease && (
+        <Toggle
+          checked={value.release}
+          onChange={(release) => onChange({ ...value, release })}
+          label="任务完成后立即释放这张卡"
+          hint="最省钱；同一张卡上还有排队的任务时会等它们做完。下次再用要重新部署模型。"
+        />
+      )}
     </div>
   );
 }

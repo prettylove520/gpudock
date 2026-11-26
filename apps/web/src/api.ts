@@ -81,22 +81,19 @@ export function uploadFiles(files: File[], onProgress?: (fraction: number) => vo
   });
 }
 
-/** Fetch a task output as an object URL (downloads need the auth header). */
-export async function fileUrl(taskId: string, name: string): Promise<string> {
-  const resp = await fetch(`/api/tasks/${taskId}/files/${encodeURIComponent(name)}`, {
-    headers: { Authorization: `Bearer ${token ?? ""}` },
-  });
-  if (!resp.ok) throw new ApiError(resp.status, "error", "文件读取失败");
-  return URL.createObjectURL(await resp.blob());
+/** Ask once for permission to show a system notification when a long task ends. */
+export function askToNotify(): void {
+  if ("Notification" in window && Notification.permission === "default") {
+    Notification.requestPermission().catch(() => {});
+  }
 }
 
-export async function saveFile(taskId: string, name: string): Promise<void> {
-  const url = await fileUrl(taskId, name);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+export function notify(body: string): void {
+  if ("Notification" in window && Notification.permission === "granted" && document.hidden) {
+    try {
+      new Notification("GPUDock", { body, tag: "gpudock" });
+    } catch {
+      /* some embedded browsers have no notifications */
+    }
+  }
 }

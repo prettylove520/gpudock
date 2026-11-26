@@ -8,6 +8,7 @@ Tasks on the same runtime run one at a time.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import platform
@@ -23,6 +24,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -36,7 +38,8 @@ from ..agent.gpudock_agent import (
     shorten_messages,
     translation_messages,
 )
-from ..files import download, upload
+from ..files import download, sha256_file, upload
+from . import catalog
 from .state import AgentBusy, AgentError, Manager, RuntimeHandle, now
 
 KINDS = {
@@ -50,6 +53,8 @@ KINDS = {
 }
 # images each generation mode takes: (min, max)
 GEN_IMAGES = {"i2v": (1, 1), "flf2v": (2, 2), "r2v": (1, 9), "edit": (1, 1)}
+MAX_TTS_LINES = 500
+ACTIVE = ("queued", "running", "waiting_review")
 MEDIA_KINDS = {".mp4": "video", ".mov": "video", ".mkv": "video", ".webm": "video", ".wav": "audio", ".mp3": "audio", ".m4a": "audio", ".png": "image", ".jpg": "image", ".jpeg": "image", ".webp": "image", ".srt": "subtitle", ".vtt": "subtitle", ".txt": "text", ".json": "data"}
 _SAFE = re.compile(r"[^\w.\-一-鿿]+")
 
@@ -99,8 +104,20 @@ class Upload:
     def view(self) -> dict[str, Any]:
         return {"id": self.id, "name": self.name, "size": self.size}
 
+    @property
+    def sha256(self) -> str:
+        """Content hash, kept next to the file (computed once for older uploads)."""
+        side = self.path.parent / ".sha256"
+        if side.exists():
+            return side.read_text().strip()
+        digest = sha256_file(self.path)
+        side.write_text(digest)
+        return digest
+
 
 class UploadStore:
+    KEEP_DAYS = 14
+
     def __init__(self, root: Path) -> None:
         self.root = root / "uploads"
 
@@ -109,18 +126,34 @@ class UploadStore:
         folder = self.root / uid
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / safe_name(filename)
+        h = hashlib.sha256()
         with path.open("wb") as fh:
-            shutil.copyfileobj(stream, fh, length=4 * 1024 * 1024)
+            while block := stream.read(4 * 1024 * 1024):
+                h.update(block)
+                fh.write(block)
+        (folder / ".sha256").write_text(h.hexdigest())
         return Upload(uid, path.name, path, path.stat().st_size)
 
     def get(self, uid: str) -> Upload:
         if not re.fullmatch(r"[0-9a-f]{12}", uid or ""):
             raise LookupError("上传文件不存在")
         folder = self.root / uid
-        files = [p for p in folder.iterdir() if p.is_file()] if folder.exists() else []
+        files = [p for p in folder.iterdir() if p.is_file() and not p.name.startswith(".")] if folder.exists() else []
         if not files:
-            raise LookupError("上传文件不存在或已被清理，请重新上传")
+            raise LookupError("上传文件不存在或已被清理（超过 14 天的上传会自动删除），请重新上传")
         return Upload(uid, files[0].name, files[0], files[0].stat().st_size)
+
+    def cleanup(self, keep: set[str] | None = None) -> int:
+        """Delete uploads older than KEEP_DAYS (results live in outputs/, not here)."""
+        if not self.root.exists():
+            return 0
+        cutoff = time.time() - self.KEEP_DAYS * 86400
+        removed = 0
+        for folder in self.root.iterdir():
+            if folder.is_dir() and folder.name not in (keep or set()) and folder.stat().st_mtime < cutoff:
+                shutil.rmtree(folder, ignore_errors=True)
+                removed += 1
+        return removed
 
 
 class SecretStore:
@@ -202,6 +235,13 @@ class Task:
     cancel_requested: bool = False
     review_event: threading.Event = field(default_factory=threading.Event, repr=False)
     review_edits: dict[str, Any] | None = None
+    auto_accel: str | None = None  # "start / reuse a runtime of this kind" instead of a fixed runtime
+    auto_job: str | None = None
+    release_after: bool = False
+    accelerator: str | None = None
+    cu_per_hour: float | None = None
+    retry_of: str | None = None
+    restorable: bool = True  # False for history from before GPUDock kept task parameters
 
     def log(self, line: str) -> None:
         self.logs.append(line)
@@ -210,8 +250,14 @@ class Task:
             self.logs = self.logs[drop:]
             self.log_offset += drop
 
+    @property
+    def est_cu(self) -> float | None:
+        if not self.started or self.cu_per_hour is None:
+            return None
+        return round(((self.finished or now()) - self.started) / 3600 * self.cu_per_hour, 3)
+
     def summary(self) -> dict[str, Any]:
-        return {
+        out = {
             "id": self.id,
             "kind": self.kind,
             "kind_label": KINDS.get(self.kind, self.kind),
@@ -227,7 +273,20 @@ class Task:
             "outputs": self.outputs,
             "out_dir": self.out_dir,
             "result": self.result,
+            "accelerator": self.accelerator or self.auto_accel,
+            "cu_per_hour": self.cu_per_hour,
+            "est_cu": self.est_cu,
+            "release_after": self.release_after,
+            "retry_of": self.retry_of,
+            "can_retry": self.restorable and self.status not in ACTIVE,
         }
+        if self.kind == "generate" and self.restorable:
+            out["gen"] = {k: self.params.get(k) for k in ("model", "mode", "prompt", "width", "height", "seconds", "fast", "seed")}
+        return out
+
+    def record(self) -> dict[str, Any]:
+        """What the history file keeps: the summary plus what a retry needs."""
+        return {**self.summary(), "params": self.params, "uploads": self.uploads, "auto_accel": self.auto_accel}
 
     def detail(self, log_since: int = 0) -> dict[str, Any]:
         start = max(0, log_since - self.log_offset)
@@ -253,9 +312,19 @@ class TaskManager:
         self.tasks: dict[str, Task] = {}
         self._runtime_locks: dict[str, threading.Lock] = {}
         self._lock = threading.Lock()
+        self._auto_lock = threading.Lock()
+        self._history_lock = threading.Lock()
         self.history_path = manager.config_dir / "tasks.json"
         self.translator_path = manager.config_dir / "translator.json"
         self._load_history()
+        threading.Thread(target=self._cleanup_uploads, name="gpudock-cleanup", daemon=True).start()
+
+    def _cleanup_uploads(self) -> None:
+        recent = {u for t in self.tasks.values() if t.created > time.time() - UploadStore.KEEP_DAYS * 86400 for u in t.uploads}
+        try:
+            self.uploads.cleanup(keep=recent)
+        except OSError:
+            pass
 
     # ---- history ------------------------------------------------------------
     def _load_history(self) -> None:
@@ -263,23 +332,34 @@ class TaskManager:
             return
         try:
             for s in json.loads(self.history_path.read_text()):
+                interrupted = s["status"] not in ("done", "error", "cancelled")
                 t = Task(
-                    id=s["id"], kind=s["kind"], title=s["title"], runtime=s["runtime"], params={}, uploads=[], out_dir=s["out_dir"],
-                    status=s["status"] if s["status"] in ("done", "error", "cancelled") else "interrupted",
-                    stage=s.get("stage", ""), progress=s.get("progress", 0), outputs=s.get("outputs", []),
-                    error=s.get("error"), result=s.get("result") or {}, created=s["created"], started=s.get("started"), finished=s.get("finished"),
+                    id=s["id"], kind=s["kind"], title=s["title"], runtime=s["runtime"], params=s.get("params") or {},
+                    uploads=s.get("uploads") or [], out_dir=s["out_dir"],
+                    status="interrupted" if interrupted else s["status"],
+                    stage="GPUDock 重启时任务中断" if interrupted else s.get("stage", ""),
+                    progress=s.get("progress", 0), outputs=s.get("outputs", []),
+                    error=s.get("error"), result=s.get("result") or {}, created=s["created"], started=s.get("started"),
+                    finished=s.get("finished") or (s.get("started") if interrupted else None),
+                    auto_accel=s.get("auto_accel"), release_after=bool(s.get("release_after")),
+                    accelerator=s.get("accelerator"), cu_per_hour=s.get("cu_per_hour"), retry_of=s.get("retry_of"),
+                    restorable="params" in s,
                 )
                 self.tasks[t.id] = t
         except (ValueError, KeyError):
             pass
 
     def _save_history(self) -> None:
-        done = sorted(self.tasks.values(), key=lambda t: t.created)[-200:]
-        self.history_path.write_text(json.dumps([t.summary() for t in done], ensure_ascii=False, indent=1))
+        with self._history_lock:
+            done = sorted(self.tasks.values(), key=lambda t: t.created)[-200:]
+            tmp = self.history_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps([t.record() for t in done], ensure_ascii=False, indent=1))
+            tmp.replace(self.history_path)
 
     # ---- public API -----------------------------------------------------------
-    def list(self) -> list[dict[str, Any]]:
-        return [t.summary() for t in sorted(self.tasks.values(), key=lambda t: t.created, reverse=True)]
+    def list(self, *, active: bool = False, kind: str | None = None) -> list[dict[str, Any]]:
+        tasks = sorted(self.tasks.values(), key=lambda t: t.created, reverse=True)
+        return [t.summary() for t in tasks if (not active or t.status in ACTIVE) and (not kind or t.kind == kind)]
 
     def get(self, task_id: str) -> Task:
         task = self.tasks.get(task_id)
@@ -287,18 +367,42 @@ class TaskManager:
             raise LookupError("没有这个任务")
         return task
 
-    def create(self, kind: str, runtime_id: str, params: dict[str, Any], upload_ids: list[str] | None = None) -> Task:
+    def create(
+        self,
+        kind: str,
+        runtime_id: str,
+        params: dict[str, Any],
+        upload_ids: list[str] | None = None,
+        *,
+        accelerator: str | None = None,
+        release_after: bool = False,
+        retry_of: str | None = None,
+    ) -> Task:
+        """``runtime_id`` "auto" means: reuse a running GPUDock runtime with this
+        ``accelerator``, else wait for one being started, else start one."""
         if kind not in KINDS:
             raise ValueError(f"不支持的任务类型：{kind}")
-        runtime = runtime_id if runtime_id.startswith("runtimes/") else f"runtimes/{runtime_id}"
+        auto_accel = None
+        if runtime_id == "auto":
+            auto_accel = (accelerator or "").upper()
+            if catalog.CATALOG.get(auto_accel, {}).get("kind") != "gpu":
+                raise ValueError("自动申请需要指定一种 GPU")
+            runtime = ""
+        else:
+            runtime = runtime_id if runtime_id.startswith("runtimes/") else f"runtimes/{runtime_id}"
         uploads = [self.uploads.get(u) for u in (upload_ids or [])]
         self._validate(kind, params, uploads)
         if "voxcpm" in self._needs(kind, params):
-            self._check_ram(runtime)
+            self._check_ram(runtime, auto_accel)
         task_id = time.strftime("%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:4]
         title = self._title(kind, params, uploads)
         out_dir = self.root / "outputs" / f"{task_id}-{KINDS[kind]}"
-        task = Task(id=task_id, kind=kind, title=title, runtime=runtime, params=dict(params), uploads=[u.id for u in uploads], out_dir=str(out_dir))
+        task = Task(
+            id=task_id, kind=kind, title=title, runtime=runtime, params=dict(params), uploads=[u.id for u in uploads], out_dir=str(out_dir),
+            auto_accel=auto_accel, release_after=release_after, retry_of=retry_of,
+        )
+        if auto_accel:
+            task.stage = f"等待 {auto_accel}"
         for u in uploads:
             task.items[u.name] = {"name": u.name, "status": "waiting", "detail": ""}
         self.tasks[task.id] = task
@@ -311,11 +415,31 @@ class TaskManager:
             return
         task.cancel_requested = True
         task.review_event.set()
-        if task.status == "running":
+        if task.status == "running" and task.runtime:
             try:
                 self.m.handle(task.runtime).interrupt_worker()
             except Exception:
                 pass
+
+    def retry(self, task_id: str, *, runtime: str | None = None, overrides: dict[str, Any] | None = None) -> Task:
+        """Run a finished task again with the same inputs. A dub reuses the
+        transcript and the (reviewed) translation of the earlier run."""
+        old = self.get(task_id)
+        if old.status in ACTIVE:
+            raise RuntimeError("这个任务还在进行中")
+        if not old.restorable:
+            raise ValueError("这个任务是旧版本 GPUDock 创建的，没有保存参数，请重新填写后提交")
+        params = {**old.params, **(overrides or {})}
+        params = {k: v for k, v in params.items() if v is not None}
+        if old.kind == "dub" and (Path(old.out_dir) / ".work" / "dub_segments.json").exists():
+            params["resume_from"] = old.id
+        accel = old.accelerator or old.auto_accel
+        if runtime is None:
+            live = {r.name for r in self.m.live_runtimes()}
+            runtime = old.runtime if old.runtime in live else "auto"
+        if runtime == "auto" and not accel:
+            raise ValueError("原来的显卡已经释放了，请先选一张显卡")
+        return self.create(old.kind, runtime, params, old.uploads, accelerator=accel, release_after=old.release_after, retry_of=old.id)
 
     def submit_review(self, task_id: str, edits: dict[str, Any]) -> None:
         task = self.get(task_id)
@@ -412,8 +536,12 @@ class TaskManager:
             return {"voxcpm" if p.get("voice_mode") == "clone" else "kokoro", "whisper"}
         return set()
 
-    def _check_ram(self, runtime: str) -> None:
+    def _check_ram(self, runtime: str, auto_accel: str | None = None) -> None:
         """Colab's T4 (standard shape) has ~12.7 GB RAM; VoxCPM2 peaks around 10 GB while loading."""
+        if auto_accel:
+            if auto_accel in ("T4", "NONE"):
+                raise ValueError("声音克隆（VoxCPM2）加载时需要约 10 GB 内存，T4 标准版不够：请换 L4、A100，或 T4 高内存版。")
+            return
         try:
             spec = self.m.api.get_runtime(runtime).spec
         except Exception:
@@ -436,6 +564,9 @@ class TaskManager:
         if kind in ("tts", "tts_preview"):
             if not (p.get("text") or "").strip():
                 raise ValueError("请输入要朗读的文字")
+            n = sum(1 for line in (p.get("text") or "").splitlines() if line.strip())
+            if n > MAX_TTS_LINES:
+                raise ValueError(f"一次最多 {MAX_TTS_LINES} 行，现在有 {n} 行，请分成几批提交")
             if p.get("engine") == "voxcpm" and uploads and not p.get("consent"):
                 raise ValueError("使用参考音色克隆前，请先确认你拥有该声音的使用授权")
             if p.get("engine", "kokoro") == "kokoro" and not LANGS.get(p.get("lang", "zh"), {}).get("kokoro"):
@@ -498,34 +629,122 @@ class TaskManager:
 
     # ---- runner -----------------------------------------------------------------
     def _run(self, task: Task) -> None:
+        if not task.runtime:
+            try:
+                self._resolve_runtime(task)
+            except Exception as err:
+                self._fail(task, err)
+                self._finish(task)
+                return
         lock = self._runtime_locks.setdefault(task.runtime, threading.Lock())
         with lock:
             handle = self.m.handle(task.runtime)
             task.status, task.started, task.stage = "running", now(), "准备中"
+            task.accelerator, task.cu_per_hour = self._rate(task.runtime)
             handle.busy_task = task.id
             self.m._touch(handle)
             try:
                 self._check(task)
+                if handle.orphan_interrupted:
+                    handle.orphan_interrupted = False
+                    task.log("已停止 GPUDock 上次退出时留在运行时上的任务")
                 getattr(self, f"_run_{task.kind}")(task, handle)
                 task.status, task.stage, task.progress = "done", "完成", 1.0
-            except Cancelled:
-                task.status, task.stage = "cancelled", "已取消"
             except Exception as err:
-                if task.cancel_requested:
-                    task.status, task.stage = "cancelled", "已取消"
-                else:
-                    task.status, task.error = "error", str(err)
-                    task.log(f"[错误] {err}")
+                self._fail(task, err)
             finally:
                 task.finished = now()
                 handle.busy_task = None
                 self.m._touch(handle)
                 if task.kind == "install":
                     handle.agent_status = None
-                self._write_log(task)
-                self._save_history()
-                labels = {"done": "完成", "error": "失败", "cancelled": "已取消"}
-                self.m._event(f"task_{task.status}", f"{task.title}：{labels.get(task.status, task.status)}", task=task.id)
+        self._maybe_release(task)
+        self._finish(task)
+
+    @staticmethod
+    def _fail(task: Task, err: Exception) -> None:
+        if isinstance(err, Cancelled) or task.cancel_requested:
+            task.status, task.stage = "cancelled", "已取消"
+        else:
+            task.status, task.error = "error", str(err)
+            task.log(f"[错误] {err}")
+
+    def _finish(self, task: Task) -> None:
+        task.finished = task.finished or now()
+        self._write_log(task)
+        self._save_history()
+        labels = {"done": "完成", "error": "失败", "cancelled": "已取消"}
+        self.m._event(f"task_{task.status}", f"{task.title}：{labels.get(task.status, task.status)}", task=task.id)
+
+    def _rate(self, runtime: str) -> tuple[str | None, float | None]:
+        meta = self.m.owned.get(runtime)
+        if meta and meta.get("accelerator"):
+            accel, shape = meta["accelerator"], meta.get("shape", "SHAPE_STANDARD")
+        else:
+            try:
+                spec = next((r.spec for r in self.m.live_runtimes() if r.name == runtime and r.spec), None)
+            except Exception:
+                spec = None
+            if spec is None:
+                return None, None
+            accel, shape = spec.accelerator, spec.shape
+        return accel, catalog.info_for(accel, shape).get("cu_per_hour")
+
+    def _resolve_runtime(self, task: Task) -> None:
+        """Pick the runtime for an "auto" task: a running GPUDock runtime of the
+        wanted kind, else one being started, else start one. Tasks that end up on
+        the same runtime then run one after another."""
+        accel = task.auto_accel or ""
+        with self._auto_lock:
+            self._check(task)
+            for r in self.m.live_runtimes(max_age=0):
+                meta = self.m.owned.get(r.name)
+                if meta and not meta.get("pending") and r.spec and r.spec.accelerator.upper() == accel:
+                    task.runtime = r.name
+                    task.log(f"使用已经在运行的 {meta.get('label', accel)}")
+                    return
+            job = next((j for j in self.m.jobs.values() if j.kind == "create" and j.status == "running" and j.accelerator == accel and not j.cancelled), None)
+            if job is None:
+                job = self.m.create_runtime(accel, "SHAPE_STANDARD", auto=True)
+                task.log(f"已向 Colab 申请 {job.label}，拿到后自动开始")
+            else:
+                task.log(f"等待正在申请的 {job.label}")
+            task.auto_job = job.id
+        while job.status == "running":
+            if task.cancel_requested:
+                waiting = [t for t in self.tasks.values() if t is not task and t.auto_job == job.id and not t.runtime and not t.cancel_requested]
+                if job.auto and not waiting:
+                    job.cancelled = True
+                raise Cancelled()
+            task.stage = f"申请 {job.label} · {job.message}"
+            time.sleep(1)
+        if job.status != "done" or not job.result:
+            raise RuntimeError(f"申请 {job.label} 没有成功：{job.error or job.status}")
+        task.runtime = job.result["name"]
+        task.log(f"{job.label} 已就绪")
+
+    def _maybe_release(self, task: Task) -> None:
+        """Release the runtime after a task that asked for it, unless more work is lined up for it."""
+        if not task.release_after or not task.runtime or task.status == "waiting_review":
+            return
+        others = [
+            t for t in self.tasks.values()
+            if t is not task and t.status in ACTIVE and (t.runtime == task.runtime or (not t.runtime and t.auto_accel == task.accelerator))
+        ]
+        handle = self.m.handles.get(task.runtime)
+        if others:
+            task.log(f"还有 {len(others)} 个任务要用这张卡，暂不释放")
+            return
+        if handle and handle.busy_exec:
+            task.log("控制台还在执行代码，暂不释放")
+            return
+        try:
+            self.m.release(task.runtime, reason="task")
+            task.log("已按设置释放运行时，计费停止")
+        except PermissionError:
+            task.log("这个运行时不是 GPUDock 创建的，没有自动释放")
+        except Exception as err:
+            task.log(f"释放运行时失败：{err}（空闲自动释放仍会兜底）")
 
     def _write_log(self, task: Task) -> None:
         if task.kind in ("chat", "tts_preview") and task.status == "done":
@@ -568,19 +787,38 @@ class TaskManager:
         total = sum(u.size for u in uploads) or 1
         done = 0
         conn = handle._connection()
+        skipped = 0
         for u in uploads:
             self._check(task)
             task.stage = f"上传 · {u.name}"
             task.items[u.name]["status"] = "uploading"
-            remote = handle.remote("tasks", task.id, "in", u.name)
-            upload(conn, u.path, remote, on_progress=lambda d, t, _done=done: setattr(task, "progress", base + span * (_done + d) / total))
+            # content-addressed, so the same file is sent to a runtime only once
+            remote = handle.remote("inputs", u.sha256[:24], u.name)
+            if self._remote_size(conn, remote) == u.size:
+                skipped += 1
+            else:
+                upload(conn, u.path, remote, on_progress=lambda d, t, _done=done: setattr(task, "progress", base + span * (_done + d) / total))
             done += u.size
+            task.progress = base + span * done / total
             task.items[u.name]["status"] = "uploaded"
             files.append({"name": u.name, "path": handle.absolute(remote), "remote": remote, "size": u.size})
-        task.log(f"已上传 {len(files)} 个文件到运行时")
+        task.log(f"已上传 {len(files) - skipped} 个文件到运行时" + (f"，{skipped} 个已在运行时上，跳过" if skipped else ""))
         return files
 
+    @staticmethod
+    def _remote_size(conn, remote: str) -> int | None:
+        try:
+            resp = conn.request("GET", "api/contents/" + quote(remote, safe="/"), params={"content": "0"})
+            if resp.status_code == 200:
+                return resp.json().get("size")
+        except (httpx.HTTPError, ValueError):
+            pass
+        return None
+
     def _ensure(self, task: Task, handle: RuntimeHandle, recipes: list[str], base: float, span: float, models: dict[str, str] | None = None) -> None:
+        if handle.agent_status is None:
+            # on a fresh runtime this starts the worker kernel first: tens of seconds
+            task.stage = "检查运行时环境"
         status = self.runtime_status(task.runtime) if handle.agent_status is None else handle.agent_status
         have = (status or {}).get("installed", {})
         def has(recipe: str) -> bool:
@@ -654,7 +892,7 @@ class TaskManager:
         task.stage = "下载结果"
         for f in res.get("files", []):
             self._fetch(task, handle, f["path"], f["name"])
-        task.result = {"seed": res.get("seed"), "template": res.get("template")}
+        task.result = {"seed": res.get("seed"), "template": res.get("template"), "gen_seconds": res.get("gen_seconds")}
 
     def hf_token(self) -> str | None:
         return self.secrets.get("hf-token")
@@ -789,6 +1027,9 @@ class TaskManager:
         needs = ["whisper", engine] + (["demucs"] if separate else []) + (["qwen"] if translator == "runtime" and not same_lang else [])
 
         files = self._upload_inputs(task, handle, 0.0, 0.08)
+        resumed = self._load_dub_segments(p.get("resume_from"), [f["name"] for f in files])
+        if resumed:
+            needs.remove("whisper")
         self._ensure(task, handle, needs, 0.08, 0.22)
 
         info = {i["path"]: i for i in self._agent(task, handle, "probe", {"paths": [f["path"] for f in files]}, 0.3, 0.01)["items"]}
@@ -801,6 +1042,29 @@ class TaskManager:
             sep = self._agent(task, handle, "separate", {"inputs": [{"path": f["path"], "name": f["name"]} for f in files], "out_dir": self._work(handle, task, "sep")}, 0.31, 0.09)
             stems = {i["name"]: i for i in sep["items"]}
 
+        if resumed:
+            segs_by_item, langs = resumed
+            task.log("沿用上次运行已识别、已翻译（含你的校对）的字幕，跳过识别和翻译")
+            task.progress = 0.6
+        else:
+            segs_by_item, langs = self._dub_transcribe_translate(task, handle, files, stems, separate, src, tgt, translator, same_lang)
+
+        self._dub_speak_render(task, handle, files, stems, segs_by_item, engine, clone, keep_bgm, separate, translator, same_lang, tgt)
+
+    def _load_dub_segments(self, old_id: str | None, names: list[str]) -> tuple[dict, dict] | None:
+        if not old_id or old_id not in self.tasks:
+            return None
+        path = Path(self.tasks[old_id].out_dir) / ".work" / "dub_segments.json"
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not all(n in data.get("items", {}) for n in names):
+            return None
+        return {n: data["items"][n] for n in names}, {n: data.get("langs", {}).get(n) for n in names}
+
+    def _dub_transcribe_translate(self, task: Task, handle: RuntimeHandle, files, stems, separate, src, tgt, translator, same_lang):
+        p = task.params
         asr = self._agent(
             task,
             handle,
@@ -857,6 +1121,17 @@ class TaskManager:
                         s["text"] = changed[s["id"]].strip()
             task.status, task.review = "running", None
 
+        # keep the transcript and the reviewed translation, so a retry can skip straight to speech
+        work = Path(task.out_dir) / ".work"
+        work.mkdir(parents=True, exist_ok=True)
+        (work / "dub_segments.json").write_text(
+            json.dumps({"items": {n: [{k: s[k] for k in ("id", "start", "end", "source", "text")} for s in segs] for n, segs in segs_by_item.items()}, "langs": langs}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return segs_by_item, langs
+
+    def _dub_speak_render(self, task: Task, handle: RuntimeHandle, files, stems, segs_by_item, engine, clone, keep_bgm, separate, translator, same_lang, tgt):
+        p = task.params
         # speech
         tts_base = 0.62
         for n, f in enumerate(files):

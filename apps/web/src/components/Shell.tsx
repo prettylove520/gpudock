@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, ApiError, post, put } from "../api";
-import { Ctx, type AppCtx, type Route } from "../ctx";
-import type { Account, AppEvent, Catalog, GpuCardData, Job, RuntimesResponse } from "../types";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { api, ApiError, askToNotify, notify, post, put } from "../api";
+import { Ctx, type AppCtx, type ConfirmOptions, type Route, type TaskRequest } from "../ctx";
+import type { Account, AppEvent, Catalog, GpuCardData, Job, RuntimesResponse, TaskDetail, TaskSummary } from "../types";
 import { tierLabel, usePoll } from "../util";
 import { Logo } from "./Logo";
 import Gpus from "../pages/Gpus";
@@ -16,6 +16,10 @@ interface Toast {
   id: number;
   kind: "info" | "error" | "success";
   text: string;
+}
+
+interface Dialog extends ConfirmOptions {
+  resolve: (ok: boolean) => void;
 }
 
 const NAV: { route: Route; label: string }[] = [
@@ -45,23 +49,57 @@ export default function Shell({ onLoggedOut }: { onLoggedOut: () => void }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [eventCursor, setEventCursor] = useState<number | null>(null);
   const [menu, setMenu] = useState(false);
+  const [dialog, setDialog] = useState<Dialog | null>(null);
+  const [activeTasks, setActiveTasks] = useState<TaskSummary[]>([]);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const onHash = () => setRoute(readRoute());
+    // back/forward and edited URLs change only the hash: start each page at the top
+    const onHash = () => {
+      setRoute(readRoute());
+      window.scrollTo({ top: 0 });
+    };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
+
+  useEffect(() => {
+    if (!menu) return;
+    const onDown = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenu(false);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setMenu(false);
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menu]);
 
   const go = useCallback((r: Route) => {
     window.location.hash = `/${r}`;
     window.scrollTo({ top: 0, behavior: "smooth" });
   }, []);
 
-  const toast = useCallback((kind: Toast["kind"], text: string) => {
-    const id = Date.now() + Math.random();
-    setToasts((t) => [...t, { id, kind, text }]);
-    window.setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), kind === "error" ? 12000 : 5000);
-  }, []);
+  const dismiss = useCallback((id: number) => setToasts((t) => t.filter((x) => x.id !== id)), []);
+  const toast = useCallback(
+    (kind: Toast["kind"], text: string) => {
+      const id = Date.now() + Math.random();
+      setToasts((t) => [...t.slice(-4), { id, kind, text }]);
+      window.setTimeout(() => dismiss(id), kind === "error" ? 12000 : 5000);
+    },
+    [dismiss],
+  );
+
+  const confirm = useCallback((opts: ConfirmOptions) => new Promise<boolean>((resolve) => setDialog({ ...opts, resolve })), []);
+  const closeDialog = useCallback(
+    (ok: boolean) => {
+      dialog?.resolve(ok);
+      setDialog(null);
+    },
+    [dialog],
+  );
 
   const handle = useCallback(
     (e: unknown) => {
@@ -97,6 +135,19 @@ export default function Shell({ onLoggedOut }: { onLoggedOut: () => void }) {
   }, [handle]);
   usePoll(reloadRuntimes, 5000);
 
+  const loadActive = useCallback(async () => {
+    try {
+      setActiveTasks(await api<TaskSummary[]>("/api/tasks?active=true"));
+    } catch {
+      /* the badge is best-effort */
+    }
+  }, []);
+  usePoll(loadActive, 4000);
+
+  useEffect(() => {
+    document.title = activeTasks.length ? `(${activeTasks.length}) GPUDock` : "GPUDock";
+  }, [activeTasks.length]);
+
   const running = Object.values(myJobs).filter((j) => j.status === "running");
   usePoll(
     async () => {
@@ -123,20 +174,29 @@ export default function Shell({ onLoggedOut }: { onLoggedOut: () => void }) {
     running.length > 0,
   );
 
-  usePoll(async () => {
-    try {
-      const r = await api<{ events: AppEvent[]; next: number }>(`/api/events?since=${eventCursor ?? 0}`);
-      if (eventCursor !== null) {
-        for (const ev of r.events) {
-          const kind = ev.kind.endsWith("error") ? "error" : ev.kind === "created" || ev.kind === "task_done" ? "success" : "info";
-          toast(kind, ev.message);
+  // Events keep coming in the background (slowly) so a finished task can raise a system notification.
+  usePoll(
+    async () => {
+      try {
+        const r = await api<{ events: AppEvent[]; next: number }>(`/api/events?since=${eventCursor ?? 0}`);
+        if (eventCursor !== null) {
+          for (const ev of r.events) {
+            const kind = ev.kind.endsWith("error") ? "error" : ev.kind === "created" || ev.kind === "task_done" ? "success" : "info";
+            toast(kind, ev.message);
+            if (ev.kind.startsWith("task_") || ev.kind === "auto_released" || ev.kind === "created") notify(ev.message);
+          }
+          if (r.events.some((ev) => ev.kind.startsWith("task_"))) loadActive();
+          if (r.events.some((ev) => ["created", "released", "auto_released", "reclaimed"].includes(ev.kind))) reloadRuntimes();
         }
+        setEventCursor(r.next);
+      } catch {
+        /* ignore */
       }
-      setEventCursor(r.next);
-    } catch {
-      /* ignore */
-    }
-  }, 4000);
+    },
+    4000,
+    true,
+    15000,
+  );
 
   const startRuntime = useCallback(
     async (accelerator: string, shape: string, label: string) => {
@@ -152,9 +212,49 @@ export default function Shell({ onLoggedOut }: { onLoggedOut: () => void }) {
     [handle, reloadRuntimes, toast],
   );
 
-  async function setAutoRelease(minutes: number) {
+  const submitTask = useCallback(
+    async ({ kind, target, accelerator, params, uploads = [] }: TaskRequest) => {
+      if (!target.runtime) return null;
+      try {
+        const t = await post<TaskDetail>("/api/tasks", {
+          kind,
+          runtime: target.runtime,
+          accelerator: target.runtime === "auto" ? accelerator : undefined,
+          release_after: target.release,
+          params,
+          uploads,
+        });
+        askToNotify();
+        loadActive();
+        if (target.runtime === "auto") window.setTimeout(reloadRuntimes, 1500);
+        return t;
+      } catch (e) {
+        handle(e);
+        return null;
+      }
+    },
+    [handle, loadActive, reloadRuntimes],
+  );
+
+  const retryTask = useCallback(
+    async (id: string, overrides: Record<string, unknown> = {}) => {
+      try {
+        const t = await post<TaskDetail>(`/api/tasks/${id}/retry`, { overrides });
+        askToNotify();
+        loadActive();
+        toast("info", "已重新提交");
+        return t;
+      } catch (e) {
+        handle(e);
+        return null;
+      }
+    },
+    [handle, loadActive, toast],
+  );
+
+  async function saveSettings(body: Record<string, unknown>) {
     try {
-      await put("/api/settings", { auto_release_minutes: minutes });
+      await put("/api/settings", body);
       reloadRuntimes();
     } catch (e) {
       handle(e);
@@ -181,16 +281,22 @@ export default function Shell({ onLoggedOut }: { onLoggedOut: () => void }) {
       handle,
       go,
       startRuntime,
+      confirm,
+      activeTasks,
+      submitTask,
+      retryTask,
     }),
-    [account, catalog, specs, specsError, data, selected, reloadRuntimes, toast, handle, go, startRuntime],
+    [account, catalog, specs, specsError, data, selected, reloadRuntimes, toast, handle, go, startRuntime, confirm, activeTasks, submitTask, retryTask],
   );
 
   const initial = (account?.email ?? "G").slice(0, 1).toUpperCase();
+  const busy = activeTasks.filter((t) => t.status !== "waiting_review").length;
+  const review = activeTasks.length - busy;
 
   return (
     <Ctx.Provider value={ctx}>
       <div className="app">
-                <header className="topbar">
+        <header className="topbar">
           <a className="logo-link" onClick={() => go("gpus")}>
             <Logo withText />
           </a>
@@ -198,13 +304,21 @@ export default function Shell({ onLoggedOut }: { onLoggedOut: () => void }) {
             {NAV.map((n) => (
               <button key={n.route} className={`nav-link ${route === n.route ? "on" : ""}`} onClick={() => go(n.route)}>
                 {n.label}
+                {n.route === "tasks" && activeTasks.length > 0 && <span className="nav-count">{activeTasks.length}</span>}
               </button>
             ))}
           </nav>
           <div className="topbar-right">
+            {activeTasks.length > 0 && (
+              <button className={`task-badge ${review ? "attention" : ""}`} onClick={() => go("tasks")} title={activeTasks.map((t) => `${t.title} · ${t.stage}`).join("\n")}>
+                <span className="pulse-dot busy" />
+                {review ? `${review} 个任务等你校对` : `${busy} 个任务进行中`}
+                {busy === 1 && !review && <span className="mono subtle">{Math.round(activeTasks[0].progress * 100)}%</span>}
+              </button>
+            )}
             <label className="pill-select" title="只会释放 GPUDock 创建的运行时">
               <span>空闲自动释放</span>
-              <select value={data?.auto_release_minutes ?? 30} onChange={(e) => setAutoRelease(Number(e.target.value))}>
+              <select value={data?.auto_release_minutes ?? 30} onChange={(e) => saveSettings({ auto_release_minutes: Number(e.target.value) })}>
                 <option value={0}>关闭</option>
                 <option value={15}>15 分钟</option>
                 <option value={30}>30 分钟</option>
@@ -212,14 +326,25 @@ export default function Shell({ onLoggedOut }: { onLoggedOut: () => void }) {
                 <option value={120}>2 小时</option>
               </select>
             </label>
-            <div className="account-wrap">
-              <button className="account-pill" onClick={() => setMenu((m) => !m)}>
+            <div className="account-wrap" ref={menuRef}>
+              <button className="account-pill" onClick={() => setMenu((m) => !m)} aria-expanded={menu}>
                 <span className="avatar">{initial}</span>
                 {account && <span className="tier">{tierLabel(account.tier)}</span>}
               </button>
               {menu && (
-                <div className="menu" onMouseLeave={() => setMenu(false)}>
+                <div className="menu" role="menu">
                   <div className="menu-mail">{account?.email ?? "已登录"}</div>
+                  <label className="menu-check">
+                    <input
+                      type="checkbox"
+                      checked={data?.release_on_exit ?? true}
+                      onChange={(e) => saveSettings({ release_on_exit: e.target.checked })}
+                    />
+                    <span>
+                      退出 GPUDock 时释放显卡
+                      <span className="field-hint block">关掉 GPUDock 后空闲自动释放也会停止，建议开着</span>
+                    </span>
+                  </label>
                   <button className="menu-item" onClick={logout}>退出登录</button>
                 </div>
               )}
@@ -231,6 +356,7 @@ export default function Shell({ onLoggedOut }: { onLoggedOut: () => void }) {
           {NAV.map((n) => (
             <button key={n.route} className={`nav-link ${route === n.route ? "on" : ""}`} onClick={() => go(n.route)}>
               {n.label}
+              {n.route === "tasks" && activeTasks.length > 0 && <span className="nav-count">{activeTasks.length}</span>}
             </button>
           ))}
         </nav>
@@ -248,13 +374,42 @@ export default function Shell({ onLoggedOut }: { onLoggedOut: () => void }) {
           </footer>
         </main>
 
-        <div className="toasts">
+        <div className="toasts" aria-live="polite">
           {toasts.map((t) => (
-            <div key={t.id} className={`toast ${t.kind}`}>{t.text}</div>
+            <div key={t.id} className={`toast ${t.kind}`}>
+              <span>{t.text}</span>
+              <button className="toast-x" aria-label="关闭" onClick={() => dismiss(t.id)}>×</button>
+            </div>
           ))}
         </div>
+
+        {dialog && <ConfirmDialog dialog={dialog} onClose={closeDialog} />}
       </div>
     </Ctx.Provider>
+  );
+}
+
+function ConfirmDialog({ dialog, onClose }: { dialog: Dialog; onClose: (ok: boolean) => void }) {
+  const okRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    okRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose(false);
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div className="modal-back" onMouseDown={(e) => e.target === e.currentTarget && onClose(false)}>
+      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
+        <h2 id="dlg-title">{dialog.title}</h2>
+        {dialog.body && <p className="subtle">{dialog.body}</p>}
+        <div className="modal-actions">
+          <button className="btn ghost" onClick={() => onClose(false)}>取消</button>
+          <button ref={okRef} className={`btn ${dialog.danger ? "danger-solid" : "primary"}`} onClick={() => onClose(true)}>
+            {dialog.ok ?? "确定"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

@@ -36,6 +36,8 @@ export interface GpuCardData {
   cu_per_hour: number | null;
   tagline: string;
   good_for: string[];
+  can_run: string[];
+  cannot_run: string[];
   notes: string;
   eligible: boolean;
   options: SpecOption[];
@@ -51,6 +53,7 @@ export interface RuntimeView {
   vram_gb: number | null;
   cu_per_hour: number | null;
   owned: boolean;
+  auto: boolean;
   created_at: number | null;
   uptime_s: number | null;
   est_cu: number | null;
@@ -72,14 +75,23 @@ export interface Job {
   error: string | null;
   result: { name: string; id: string } | null;
   attempts?: number;
+  auto?: boolean;
   started: number;
   finished: number | null;
+}
+
+export interface Usage {
+  today_cu: number;
+  month_cu: number;
+  has_unpriced: boolean;
 }
 
 export interface RuntimesResponse {
   runtimes: RuntimeView[];
   pending: Job[];
   auto_release_minutes: number;
+  release_on_exit: boolean;
+  usage: Usage;
 }
 
 export interface Chunk {
@@ -94,6 +106,7 @@ export interface ExecView {
   status: "running" | "ok" | "error" | "aborted";
   chunks: Chunk[];
   next: number;
+  truncated?: boolean;
   error: { ename: string; evalue: string; traceback: string[] } | null;
   started: number;
   finished: number | null;
@@ -112,6 +125,7 @@ export interface AppEvent {
   kind: string;
   message: string;
   runtime?: string;
+  task?: string;
 }
 
 export interface Recipe {
@@ -162,6 +176,18 @@ export interface TaskOutput {
   name: string;
   size: number;
   kind: "video" | "audio" | "image" | "subtitle" | "text" | "data" | "file";
+  url: string;
+}
+
+export interface GenBrief {
+  model: string;
+  mode: string;
+  prompt: string;
+  width: number;
+  height: number;
+  seconds?: number | null;
+  fast?: boolean | null;
+  seed?: number | null;
 }
 
 export interface TaskSummary {
@@ -179,7 +205,14 @@ export interface TaskSummary {
   finished: number | null;
   outputs: TaskOutput[];
   out_dir: string;
-  result: { reply?: string; model?: string; recipe?: string };
+  result: { reply?: string; model?: string; recipe?: string; seed?: number; gen_seconds?: number | null };
+  accelerator: string | null;
+  cu_per_hour: number | null;
+  est_cu: number | null;
+  release_after: boolean;
+  retry_of: string | null;
+  can_retry: boolean;
+  gen?: GenBrief;
 }
 
 export interface ReviewSegment {

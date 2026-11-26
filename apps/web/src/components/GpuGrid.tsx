@@ -42,6 +42,13 @@ export default function GpuGrid({
   );
 }
 
+function cannotText(card: GpuCardData): string {
+  // a T4 can run none of the generation models: say so in two words, not eight names
+  if (card.kind === "gpu" && card.can_run.length <= 3 && card.cannot_run.length > 3) return "生图、生视频";
+  const head = card.cannot_run.slice(0, 3).join(" · ");
+  return card.cannot_run.length > 3 ? `${head} 等 ${card.cannot_run.length} 个` : head;
+}
+
 function HwTile({
   card,
   onStart,
@@ -78,12 +85,20 @@ function HwTile({
           </div>
           <div>
             <dt>单价</dt>
-            <dd>{option.cu_per_hour == null ? "暂无数据" : `${option.cu_per_hour} CU/时 · ≈$${(option.cu_per_hour * 0.1).toFixed(2)}`}</dd>
+            <dd>{option.cu_per_hour == null ? "未公开" : `${option.cu_per_hour} CU/时 · ≈$${(option.cu_per_hour * 0.1).toFixed(2)}`}</dd>
           </div>
-          {card.good_for.length > 0 && (
+          {card.can_run.length > 0 && (
             <div>
-              <dt>适合</dt>
-              <dd>{card.good_for.join(" · ")}</dd>
+              <dt>能跑</dt>
+              <dd className="can-run">{card.can_run.join(" · ")}</dd>
+            </div>
+          )}
+          {card.cannot_run.length > 0 && (
+            <div>
+              <dt>跑不了</dt>
+              <dd className="cannot-run" title={card.cannot_run.join("、")}>
+                {cannotText(card)}
+              </dd>
             </div>
           )}
         </dl>

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..agent.gpudock_agent import GEN_MODELS
 from ..colab_api import RuntimeSpec
 
 ORDER = ["T4", "L4", "A100", "G4", "H100", "V5E1", "V6E1", "NONE"]
@@ -63,7 +64,7 @@ CATALOG: dict[str, dict[str, Any]] = {
         "cu_per_hour": None,
         "tagline": "旗舰算力",
         "good_for": ["大模型推理", "训练"],
-        "notes": "单价暂无实测数据",
+        "notes": "Colab 没有公开单价，社区也还没有实测数据",
     },
     "V5E1": {
         "name": "TPU v5e-1",
@@ -109,6 +110,22 @@ def info_for(accelerator: str, shape: str = "SHAPE_STANDARD") -> dict[str, Any]:
     return base
 
 
+def features_for(accelerator: str) -> tuple[list[str], list[str]]:
+    """Which GPUDock features run on this accelerator: (can, cannot)."""
+    accel = accelerator.upper()
+    if CATALOG.get(accel, {}).get("kind") != "gpu":
+        return [], ["GPUDock 的功能都需要 GPU"]
+    can = ["转写", "配音", "朗读"]
+    cannot = []
+    if accel == "T4":
+        cannot.append("声音克隆（需高内存版）")
+    else:
+        can.append("声音克隆")
+    for m in GEN_MODELS.values():
+        (can if accel in m["gpus"] else cannot).append(m["name"])
+    return can, cannot
+
+
 def build_cards(specs: list[RuntimeSpec]) -> list[dict[str, Any]]:
     """Group specs by accelerator into one card each, with standard/highmem options."""
     cards: dict[str, dict[str, Any]] = {}
@@ -124,6 +141,7 @@ def build_cards(specs: list[RuntimeSpec]) -> list[dict[str, Any]]:
                 "options": [],
             },
         )
+        card["can_run"], card["cannot_run"] = features_for(accel)
         if spec.key.shape == "SHAPE_HIGHMEM":
             hm = info.get("highmem") or {"label": "高内存", "detail": ""}
             option = {

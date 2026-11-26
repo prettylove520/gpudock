@@ -1,7 +1,5 @@
 import { useState } from "react";
-import { post } from "../api";
-import { useApp } from "../ctx";
-import type { TaskDetail } from "../types";
+import { useApp, type Target } from "../ctx";
 import { Card, Field, FileDrop, PageHead, RuntimePicker, Seg, Toggle, type PickedFile } from "../components/common";
 import TaskPanel from "../components/TaskPanel";
 import { useStoredTask } from "./shared";
@@ -20,8 +18,8 @@ const FORMATS = [
 ];
 
 export default function Transcribe() {
-  const { catalog, handle } = useApp();
-  const [runtime, setRuntime] = useState<string | null>(null);
+  const { catalog, submitTask } = useApp();
+  const [target, setTarget] = useState<Target>({ runtime: null, release: true });
   const [files, setFiles] = useState<PickedFile[]>([]);
   const [model, setModel] = useState("large-v3-turbo");
   const [language, setLanguage] = useState("auto");
@@ -34,21 +32,12 @@ export default function Transcribe() {
   const uploading = files.some((f) => f.status === "uploading");
 
   async function start() {
-    if (!runtime) return;
     setStarting(true);
-    try {
-      const t = await post<TaskDetail>("/api/tasks", {
-        kind: "transcribe",
-        runtime,
-        params: { model, language, formats, vad },
-        uploads: ready.map((f) => f.id),
-      });
+    const t = await submitTask({ kind: "transcribe", target, accelerator: "T4", params: { model, language, formats, vad }, uploads: ready.flatMap((f) => (f.id ? [f.id] : [])) });
+    setStarting(false);
+    if (t) {
       setTaskId(t.id);
       setFiles([]);
-    } catch (e) {
-      handle(e);
-    } finally {
-      setStarting(false);
     }
   }
 
@@ -58,7 +47,7 @@ export default function Transcribe() {
       <div className="two-col">
         <div className="col">
           <Card title="1. 选择显卡" delay={40}>
-            <RuntimePicker value={runtime} onChange={setRuntime} minVram={6} />
+            <RuntimePicker value={target} onChange={setTarget} minVram={6} suggest="T4" />
           </Card>
           <Card title="2. 添加文件" hint="mp3 / wav / m4a / mp4 / mov …" delay={80}>
             <FileDrop files={files} onChange={setFiles} accept="audio/*,video/*" label="拖入音频或视频" />
@@ -90,7 +79,7 @@ export default function Transcribe() {
               </div>
             </Field>
             <Toggle checked={vad} onChange={setVad} label="跳过静音片段" hint="减少空白处的乱码和重复" />
-            <button className="btn primary full" disabled={!runtime || !ready.length || uploading || !formats.length || starting} onClick={start}>
+            <button className="btn primary full" disabled={!target.runtime || !ready.length || uploading || !formats.length || starting} onClick={start}>
               {uploading ? "等待文件上传…" : `开始转写 ${ready.length ? `${ready.length} 个文件` : ""}`} <span className="arrow">→</span>
             </button>
           </Card>
@@ -98,7 +87,7 @@ export default function Transcribe() {
       </div>
       {taskId && (
         <Card title="任务进度" delay={0}>
-          <TaskPanel taskId={taskId} />
+          <TaskPanel taskId={taskId} onRetried={(t) => setTaskId(t.id)} />
         </Card>
       )}
     </>

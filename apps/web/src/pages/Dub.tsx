@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, post, put } from "../api";
-import { useApp } from "../ctx";
-import type { TaskDetail } from "../types";
+import { api, put } from "../api";
+import { useApp, type Target } from "../ctx";
 import { Card, Field, FileDrop, PageHead, RuntimePicker, Seg, Toggle, type PickedFile } from "../components/common";
 import TaskPanel from "../components/TaskPanel";
 import { useStoredTask } from "./shared";
@@ -22,8 +21,8 @@ interface TranslatorCfg {
 }
 
 export default function Dub() {
-  const { catalog, handle, toast } = useApp();
-  const [runtime, setRuntime] = useState<string | null>(null);
+  const { catalog, handle, toast, submitTask } = useApp();
+  const [target, setTarget] = useState<Target>({ runtime: null, release: true });
   const [files, setFiles] = useState<PickedFile[]>([]);
   const [src, setSrc] = useState("auto");
   const [tgt, setTgt] = useState("zh");
@@ -71,24 +70,22 @@ export default function Dub() {
   const ready = files.filter((f) => f.status === "done");
   const uploading = files.some((f) => f.status === "uploading");
   const apiReady = translator !== "api" || !!(cfg?.base_url && cfg?.model && cfg?.has_key);
-  const canStart = !!runtime && ready.length > 0 && !uploading && apiReady && (voiceMode === "preset" || consent) && !starting;
+  const suggest = voiceMode === "clone" ? "L4" : "T4";
+  const canStart = !!target.runtime && ready.length > 0 && !uploading && apiReady && (voiceMode === "preset" || consent) && !starting;
 
   async function start() {
-    if (!runtime) return;
     setStarting(true);
-    try {
-      const t = await post<TaskDetail>("/api/tasks", {
-        kind: "dub",
-        runtime,
-        params: { src_lang: src, tgt_lang: tgt, translator, voice_mode: voiceMode, voice, keep_bgm: keepBgm, review, speed, consent },
-        uploads: ready.map((f) => f.id),
-      });
+    const t = await submitTask({
+      kind: "dub",
+      target,
+      accelerator: suggest,
+      params: { src_lang: src, tgt_lang: tgt, translator, voice_mode: voiceMode, voice, keep_bgm: keepBgm, review, speed, consent },
+      uploads: ready.flatMap((f) => (f.id ? [f.id] : [])),
+    });
+    setStarting(false);
+    if (t) {
       setTaskId(t.id);
       setFiles([]);
-    } catch (e) {
-      handle(e);
-    } finally {
-      setStarting(false);
     }
   }
 
@@ -104,7 +101,8 @@ export default function Dub() {
       <div className="two-col">
         <div className="col">
           <Card title="1. 选择显卡" hint="预置音色用 T4 即可；克隆原声需要 L4 或更好" delay={40}>
-            <RuntimePicker value={runtime} onChange={setRuntime} minVram={voiceMode === "clone" ? 12 : 8} bigRam={voiceMode === "clone"} suggest={voiceMode === "clone" ? "L4" : "T4"} />
+            <RuntimePicker value={target} onChange={setTarget} minVram={voiceMode === "clone" ? 12 : 8} bigRam={voiceMode === "clone"} suggest={suggest} />
+            {review && target.release && <p className="subtle small">开了“先让我校对”：校对期间显卡会一直等你，确认后才继续并在完成时释放。</p>}
           </Card>
           <Card title="2. 添加视频或音频" delay={80}>
             <FileDrop files={files} onChange={setFiles} accept="video/*,audio/*" label="拖入要配音的文件" />
@@ -205,7 +203,7 @@ export default function Dub() {
       </div>
       {taskId && (
         <Card title="任务进度" delay={0}>
-          <TaskPanel taskId={taskId} />
+          <TaskPanel taskId={taskId} onRetried={(t) => setTaskId(t.id)} />
         </Card>
       )}
     </>

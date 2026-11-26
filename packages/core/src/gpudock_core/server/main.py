@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 import secrets
+import signal
 import socket
 import threading
 import webbrowser
@@ -37,6 +38,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--dev", action="store_true", help="允许 Vite 开发服务器（localhost:5173）代理访问")
     p.add_argument("--token", help="开发用：固定访问令牌（默认每次启动随机生成）")
     p.add_argument("--window", action="store_true", help="在独立的桌面窗口里打开（需要 pywebview）")
+    p.add_argument("--keep-runtimes", action="store_true", help="这次退出时不释放显卡（覆盖“退出时释放”设置）")
     args = p.parse_args(argv)
 
     token = args.token or os.environ.get("GPUDOCK_TOKEN") or secrets.token_urlsafe(24)
@@ -47,19 +49,45 @@ def main(argv: list[str] | None = None) -> None:
     app = create_app(manager, token=token, allowed_hosts=allowed, tasks=TaskManager(manager))
 
     url = f"http://127.0.0.1:{port}/#token={token}"
-    print(f"\nGPUDock 已启动：{url}\n（只在本机可访问；关闭这个窗口即退出。运行中的 Colab 运行时不会随之释放。）\n", flush=True)
+    on_exit = "退出时会释放 GPUDock 开的显卡" if manager.settings.release_on_exit and not args.keep_runtimes else "退出时不会释放显卡，记得手动释放"
+    print(f"\nGPUDock 已启动：{url}\n（只在本机可访问；按 Ctrl+C 或关闭这个窗口即退出，{on_exit}。）\n", flush=True)
     if args.dev:
         print(f"开发模式：前端用 http://localhost:5173/#token={token}\n", flush=True)
-    if args.window:
-        _run_window(app, port, url)
-        manager.stop()
-        return
-    if not args.no_browser:
-        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    # Closing the terminal sends SIGHUP, which would kill the process without any
+    # cleanup; turn it into the same graceful shutdown as Ctrl+C.
+    if hasattr(signal, "SIGHUP"):
+        signal.signal(signal.SIGHUP, lambda *_: os.kill(os.getpid(), signal.SIGTERM))
     try:
-        uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+        if args.window:
+            _run_window(app, port, url)
+        else:
+            if not args.no_browser:
+                threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+            uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
     finally:
-        manager.stop()
+        _shutdown(manager, keep=args.keep_runtimes)
+
+
+def _say(text: str) -> None:
+    try:
+        print(text, flush=True)
+    except OSError:  # the terminal is already gone
+        pass
+
+
+def _shutdown(manager: Manager, *, keep: bool) -> None:
+    """The idle auto-release only runs while GPUDock does, so release on the way out."""
+    owned = [m for m in manager.owned.all().values() if not m.get("pending")]
+    if owned and manager.settings.release_on_exit and not keep:
+        _say(f"正在释放 {len(owned)} 张 GPUDock 开的显卡…")
+        try:
+            released = manager.release_all_owned()
+            _say("已释放：" + "、".join(released) if released else "没有释放成功，请到 Colab 网页里检查。")
+        except Exception as err:
+            _say(f"释放失败：{err}。请到 Colab 网页里手动释放，避免继续计费。")
+    elif owned:
+        _say(f"注意：还有 {len(owned)} 张 GPUDock 开的显卡在运行并计费。下次打开 GPUDock 会继续按空闲时间自动释放。")
+    manager.stop()
 
 
 def _run_window(app, port: int, url: str) -> None:
@@ -77,7 +105,7 @@ def _run_window(app, port: int, url: str) -> None:
     thread.start()
     while not server.started:
         time.sleep(0.05)
-    webview.create_window("GPUDock", url, width=1360, height=900, min_size=(900, 640), background_color="#06070b")
+    webview.create_window("GPUDock", url, width=1360, height=900, min_size=(900, 640), background_color="#f1eee7")
     webview.start()
     server.should_exit = True
     thread.join(timeout=5)

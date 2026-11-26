@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { api, fileUrl, post, saveFile } from "../api";
+import { api, post } from "../api";
 import { useApp } from "../ctx";
 import type { ReviewSegment, TaskDetail, TaskOutput } from "../types";
-import { duration, usePoll } from "../util";
+import { cu, duration, usePoll } from "../util";
 import { fmtSize } from "./common";
 
 const STATUS: Record<string, { label: string; cls: string }> = {
@@ -25,8 +25,20 @@ const ITEM_STATUS: Record<string, string> = {
   done: "完成",
 };
 
-export default function TaskPanel({ taskId, compact = false, onDone }: { taskId: string; compact?: boolean; onDone?: (t: TaskDetail) => void }) {
-  const { handle, toast } = useApp();
+export default function TaskPanel({
+  taskId,
+  compact = false,
+  showTitle = true,
+  onDone,
+  onRetried,
+}: {
+  taskId: string;
+  compact?: boolean;
+  showTitle?: boolean;
+  onDone?: (t: TaskDetail) => void;
+  onRetried?: (t: TaskDetail) => void;
+}) {
+  const { handle, toast, confirm, retryTask, catalog } = useApp();
   const [task, setTask] = useState<TaskDetail | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [showLogs, setShowLogs] = useState(false);
@@ -63,9 +75,24 @@ export default function TaskPanel({ taskId, compact = false, onDone }: { taskId:
   if (!task) return <div className="task-panel"><div className="spinner" /></div>;
   const st = STATUS[task.status] ?? STATUS.running;
   const elapsed = (task.finished ?? Date.now() / 1000) - (task.started ?? task.created);
+  const gen = task.gen;
+  const genModel = gen ? catalog?.gen_models[gen.model] : undefined;
+  const facts = [
+    task.accelerator && `${task.accelerator}${task.release_after ? " · 完成后释放" : ""}`,
+    task.est_cu != null && `约 ${cu(task.est_cu)}`,
+    genModel && `${genModel.name} · ${gen!.width}×${gen!.height}${gen!.seconds ? ` · ${gen!.seconds} 秒` : ""}`,
+    task.result?.seed != null && `种子 ${task.result.seed}`,
+    task.result?.gen_seconds != null && `生成 ${duration(task.result.gen_seconds)}`,
+    task.retry_of && "重新运行",
+  ].filter(Boolean) as string[];
+
+  async function retry() {
+    const t = await retryTask(taskId);
+    if (t) onRetried?.(t);
+  }
 
   async function cancel() {
-    if (!window.confirm("取消这个任务？已完成的部分不会保留。")) return;
+    if (!(await confirm({ title: "取消这个任务？", body: "已经完成的部分不会保留。如果这个任务正在申请显卡，申请也会一起取消。", ok: "取消任务", danger: true }))) return;
     try {
       await post(`/api/tasks/${taskId}/cancel`);
       toast("info", "正在取消…");
@@ -79,7 +106,7 @@ export default function TaskPanel({ taskId, compact = false, onDone }: { taskId:
       <div className="task-head">
         <div className="task-title">
           <span className={`status-pill ${st.cls}`}>{st.label}</span>
-          <b>{task.title}</b>
+          {showTitle && <b>{task.title}</b>}
         </div>
         <div className="row-gap">
           <span className="subtle small">{duration(elapsed)}</span>
@@ -87,8 +114,14 @@ export default function TaskPanel({ taskId, compact = false, onDone }: { taskId:
             <button className="btn ghost danger" onClick={cancel}>取消</button>
           )}
           {task.status === "waiting_review" && <button className="btn ghost danger" onClick={cancel}>放弃</button>}
+          {task.can_retry && (
+            <button className="btn ghost" onClick={retry} title={task.kind === "dub" ? "会沿用这次已识别、已校对的字幕" : "用同样的文件和参数再跑一次"}>
+              {task.status === "done" ? "再来一次" : "重新运行"}
+            </button>
+          )}
         </div>
       </div>
+      {facts.length > 0 && <div className="task-facts">{facts.map((f) => <span key={f}>{f}</span>)}</div>}
 
       <div className="task-progress">
         <div className={`bar big ${active ? "live" : ""}`}>
@@ -101,6 +134,9 @@ export default function TaskPanel({ taskId, compact = false, onDone }: { taskId:
       </div>
 
       {task.error && <div className="notice error">{task.error}</div>}
+      {!active && !task.can_retry && task.status !== "done" && (
+        <p className="subtle small">这条记录来自旧版本，没有保存当时的参数，不能一键重新运行，请到对应页面重新提交。</p>
+      )}
 
       {task.status === "waiting_review" && task.review && <ReviewEditor taskId={taskId} review={task.review} />}
 
@@ -135,28 +171,15 @@ export default function TaskPanel({ taskId, compact = false, onDone }: { taskId:
 
 function Outputs({ taskId, outputs }: { taskId: string; outputs: TaskOutput[] }) {
   const { handle } = useApp();
-  const [preview, setPreview] = useState<{ name: string; url: string; kind: string } | null>(null);
-  // open the main result right away when it is small media (a TTS clip, a generated image or short video)
+  const [preview, setPreview] = useState<TaskOutput | null>(null);
+  // open the main result right away when it is media (a TTS clip, a generated image or a video)
   const first = outputs[0];
-  const autoOpen =
-    !!first && ((outputs.length === 1 && first.kind === "audio") || first.kind === "image" || (first.kind === "video" && first.size < 60 * 1024 * 1024 && outputs.length <= 2));
-
-  async function open(o: TaskOutput) {
-    try {
-      const url = await fileUrl(taskId, o.name);
-      setPreview((p) => {
-        if (p) URL.revokeObjectURL(p.url);
-        return { name: o.name, url, kind: o.kind };
-      });
-    } catch (e) {
-      handle(e);
-    }
-  }
+  const autoOpen = !!first && ((outputs.length === 1 && first.kind === "audio") || first.kind === "image" || first.kind === "video");
 
   useEffect(() => {
-    if (autoOpen) open(first);
+    setPreview(autoOpen ? first : null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoOpen, taskId]);
+  }, [autoOpen, taskId, first?.url]);
 
   async function reveal() {
     try {
@@ -174,20 +197,21 @@ function Outputs({ taskId, outputs }: { taskId: string; outputs: TaskOutput[] })
       </div>
       {preview && (
         <div className="preview">
-          {preview.kind === "video" && <video src={preview.url} controls autoPlay={false} loop />}
-          {preview.kind === "audio" && <audio src={preview.url} controls />}
+          {/* signed URLs stream straight from disk, with seeking */}
+          {preview.kind === "video" && <video key={preview.url} src={preview.url} controls preload="metadata" loop />}
+          {preview.kind === "audio" && <audio key={preview.url} src={preview.url} controls preload="metadata" />}
           {preview.kind === "image" && <img src={preview.url} alt={preview.name} />}
           {!["video", "audio", "image"].includes(preview.kind) && <TextPreview url={preview.url} />}
         </div>
       )}
       <ul className="out-list">
         {outputs.map((o) => (
-          <li key={o.name}>
+          <li key={o.name} className={preview?.name === o.name ? "on" : ""}>
             <span className={`kind-dot k-${o.kind}`} />
             <span className="file-name">{o.name}</span>
             <span className="subtle small">{fmtSize(o.size)}</span>
-            <button className="link" onClick={() => open(o)}>{o.kind === "video" || o.kind === "audio" ? "播放" : o.kind === "image" ? "查看" : "预览"}</button>
-            <button className="link" onClick={() => saveFile(taskId, o.name).catch(handle)}>下载</button>
+            <button className="link" onClick={() => setPreview(o)}>{o.kind === "video" || o.kind === "audio" ? "播放" : o.kind === "image" ? "查看" : "预览"}</button>
+            <a className="link" href={`${o.url}&download=1`} download={o.name}>另存为</a>
           </li>
         ))}
       </ul>
@@ -198,7 +222,10 @@ function Outputs({ taskId, outputs }: { taskId: string; outputs: TaskOutput[] })
 function TextPreview({ url }: { url: string }) {
   const [text, setText] = useState("");
   useEffect(() => {
-    fetch(url).then((r) => r.text()).then((t) => setText(t.slice(0, 20000)));
+    fetch(url, { headers: { Range: "bytes=0-200000" } })
+      .then((r) => r.text())
+      .then((t) => setText(t.slice(0, 20000)))
+      .catch(() => setText("读取失败"));
   }, [url]);
   return <pre className="output">{text}</pre>;
 }

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, post } from "../api";
-import { useApp } from "../ctx";
-import type { AgentStatus, GenModel, Recipe, TaskDetail } from "../types";
+import { api } from "../api";
+import { useApp, type Target } from "../ctx";
+import type { AgentStatus, GenModel, Recipe } from "../types";
 import { Card, Field, PageHead, RuntimePicker } from "../components/common";
 import TaskPanel from "../components/TaskPanel";
 import { ChipArt, Pic } from "../components/Logo";
@@ -18,12 +18,20 @@ const CAT_IMG: Record<string, string> = { asr: "feat-transcribe", tts: "feat-tts
 const COMMERCIAL: Record<string, string> = { yes: "可商用", conditional: "有条件商用", unknown: "商用条款见仓库", no: "非商用" };
 
 export default function Models() {
-  const { catalog, handle, runtimes, go } = useApp();
-  const [runtime, setRuntime] = useState<string | null>(null);
+  const { catalog, handle, runtimes, go, submitTask } = useApp();
+  const [target, setTarget] = useState<Target>({ runtime: null, release: false });
+  const runtime = target.runtime;
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [loading, setLoading] = useState(false);
-  const [installs, setInstalls] = useState<Record<string, string>>({});
-  const [prompt, setPrompt] = useState("把这句话翻译成英文：今天的视频我们来聊聊开源 GPU 工具。");
+  // deployments keep running when you leave the page; remember them so their progress shows again
+  const [installs, setInstallsState] = useState<Record<string, string>>(() => JSON.parse(sessionStorage.getItem("gpudock.installs") || "{}"));
+  const setInstalls = (fn: (m: Record<string, string>) => Record<string, string>) =>
+    setInstallsState((m) => {
+      const next = fn(m);
+      sessionStorage.setItem("gpudock.installs", JSON.stringify(next));
+      return next;
+    });
+  const [prompt, setPrompt] = useState("");
   const [chatId, setChatId] = useState<string | null>(null);
   const [llm, setLlm] = useState("qwen3:8b");
 
@@ -48,22 +56,14 @@ export default function Models() {
 
   async function install(id: string, params: Record<string, unknown> = { recipe: id }) {
     if (!runtime) return;
-    try {
-      const t = await post<TaskDetail>("/api/tasks", { kind: "install", runtime, params });
-      setInstalls((m) => ({ ...m, [id]: t.id }));
-    } catch (e) {
-      handle(e);
-    }
+    const t = await submitTask({ kind: "install", target, accelerator: "", params });
+    if (t) setInstalls((m) => ({ ...m, [id]: t.id }));
   }
 
   async function chat() {
     if (!runtime || !prompt.trim()) return;
-    try {
-      const t = await post<TaskDetail>("/api/tasks", { kind: "chat", runtime, params: { prompt, model: llm } });
-      setChatId(t.id);
-    } catch (e) {
-      handle(e);
-    }
+    const t = await submitTask({ kind: "chat", target, accelerator: "", params: { prompt, model: llm } });
+    if (t) setChatId(t.id);
   }
 
   const installed = status?.installed ?? {};
@@ -86,7 +86,7 @@ export default function Models() {
       />
       <Card title="部署到" hint={status?.python ? `Python ${status.python} · ${status.gpu ?? "CPU"}` : undefined} delay={40}>
         <div className="row-between">
-          <RuntimePicker value={runtime} onChange={setRuntime} />
+          <RuntimePicker value={target} onChange={setTarget} allowAuto={false} />
           {runtime && (
             <button className="btn ghost" onClick={() => load(true)} disabled={loading}>
               {loading ? "检查中…" : "刷新状态"}
@@ -129,7 +129,7 @@ export default function Models() {
                         <span className="use">{r.download}</span>
                         <span className="use">部署约 {r.install_minutes} 分钟</span>
                       </div>
-                      {taskId && <TaskPanel taskId={taskId} compact onDone={() => load(true)} />}
+                      {taskId && <TaskPanel taskId={taskId} compact onDone={() => load(true)} onRetried={(t) => setInstalls((m) => ({ ...m, [id]: t.id }))} />}
                       <div className="row-between">
                         <a className="link" href={r.homepage} target="_blank" rel="noreferrer">项目主页 ↗</a>
                         <button className="btn narrow" disabled={!runtime || done} onClick={() => install(id)}>
@@ -179,7 +179,7 @@ export default function Models() {
                     <span className="use">推荐 {m.gpus.join(" / ")}</span>
                     {m.gated && <span className="use">需 HF 授权</span>}
                   </div>
-                  {taskId && <TaskPanel taskId={taskId} compact onDone={() => load(true)} />}
+                  {taskId && <TaskPanel taskId={taskId} compact onDone={() => load(true)} onRetried={(t) => setInstalls((m) => ({ ...m, [key]: t.id }))} />}
                   <div className="row-between">
                     <button
                       className="link"
@@ -216,7 +216,16 @@ export default function Models() {
           </select>
         </Field>
         <div className="chat-row">
-          <textarea className="input textarea" rows={3} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+          <textarea
+            className="input textarea"
+            rows={3}
+            value={prompt}
+            placeholder="例如：把这句话翻译成英文：今天的视频我们来聊聊开源 GPU 工具。"
+            onChange={(e) => setPrompt(e.target.value)}
+            onKeyDown={(e) => {
+              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") chat();
+            }}
+          />
           <button className="btn primary" disabled={!runtime || !prompt.trim()} onClick={chat}>
             发送 <span className="arrow">→</span>
           </button>

@@ -121,19 +121,81 @@ class OwnedRuntimes:
 @dataclass
 class Settings:
     auto_release_minutes: int = 30
+    # quitting GPUDock stops the idle auto-release too, so by default release on the way out
+    release_on_exit: bool = True
 
     @classmethod
     def load(cls, path) -> Settings:
         if path.exists():
             try:
                 data = json.loads(path.read_text())
-                return cls(auto_release_minutes=int(data.get("auto_release_minutes", 30)))
+                return cls(
+                    auto_release_minutes=int(data.get("auto_release_minutes", 30)),
+                    release_on_exit=bool(data.get("release_on_exit", True)),
+                )
             except (ValueError, TypeError):
                 pass
         return cls()
 
+    def to_dict(self) -> dict[str, Any]:
+        return {"auto_release_minutes": self.auto_release_minutes, "release_on_exit": self.release_on_exit}
+
     def save(self, path) -> None:
-        path.write_text(json.dumps({"auto_release_minutes": self.auto_release_minutes}, indent=2))
+        path.write_text(json.dumps(self.to_dict(), indent=2))
+
+
+class UsageLedger:
+    """Closed runtime sessions (start, end, CU/hour), so spending survives a release."""
+
+    KEEP_DAYS = 120
+
+    def __init__(self, path) -> None:
+        self.path = path
+        self._lock = threading.Lock()
+
+    def _load(self) -> list[dict[str, Any]]:
+        if not self.path.exists():
+            return []
+        try:
+            data = json.loads(self.path.read_text())
+            return data if isinstance(data, list) else []
+        except ValueError:
+            return []
+
+    def add(self, name: str, meta: dict[str, Any], end: float) -> None:
+        start = meta.get("created_at")
+        if not start or meta.get("pending"):
+            return
+        info = catalog.info_for(meta.get("accelerator", ""), meta.get("shape", "SHAPE_STANDARD"))
+        with self._lock:
+            rows = [r for r in self._load() if r.get("end", 0) > now() - self.KEEP_DAYS * 86400]
+            rows.append({"name": name, "label": meta.get("label", name), "accelerator": meta.get("accelerator"),
+                         "start": start, "end": max(end, start), "cu_per_hour": info.get("cu_per_hour")})
+            self.path.write_text(json.dumps(rows, indent=1, ensure_ascii=False))
+
+    def summary(self, running: list[dict[str, Any]]) -> dict[str, Any]:
+        """CU spent today and this month (local time), closed sessions plus the running ones."""
+        t = time.localtime()
+        day0 = time.mktime((t.tm_year, t.tm_mon, t.tm_mday, 0, 0, 0, 0, 0, -1))
+        month0 = time.mktime((t.tm_year, t.tm_mon, 1, 0, 0, 0, 0, 0, -1))
+        rows = [*self._load(), *running]
+        unknown = False
+
+        def spent(since: float) -> float:
+            nonlocal unknown
+            total = 0.0
+            for r in rows:
+                start, end = max(r["start"], since), r["end"]
+                if end <= start:
+                    continue
+                if r.get("cu_per_hour") is None:
+                    unknown = True
+                    continue
+                total += (end - start) / 3600 * r["cu_per_hour"]
+            return round(total, 2)
+
+        today, month = spent(day0), spent(month0)
+        return {"today_cu": today, "month_cu": month, "has_unpriced": unknown}
 
 
 # ---------------------------------------------------------------------------
@@ -154,10 +216,12 @@ class Job:
     finished: float | None = None
     attempts: int = 0
     cancelled: bool = False
+    auto: bool = False  # started by a task that asked for "any runtime of this kind"
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "attempts": self.attempts,
+            "auto": self.auto,
             "id": self.id,
             "kind": self.kind,
             "label": self.label,
@@ -179,20 +243,28 @@ class ExecRecord:
     code: str
     status: str = "running"  # running | ok | error | aborted
     chunks: list[dict[str, Any]] = field(default_factory=list)
+    offset: int = 0  # chunks dropped from the front (long runs keep only the tail)
     error: dict[str, Any] | None = None
     started: float = field(default_factory=now)
     finished: float | None = None
 
+    MAX_CHUNKS = 4000
+
     def add(self, kind: str, text: str) -> None:
-        self.chunks.append({"i": len(self.chunks), "kind": kind, "text": text})
+        self.chunks.append({"i": self.offset + len(self.chunks), "kind": kind, "text": text})
+        if len(self.chunks) > self.MAX_CHUNKS:
+            drop = len(self.chunks) - self.MAX_CHUNKS
+            del self.chunks[:drop]
+            self.offset += drop
 
     def view(self, since: int = 0) -> dict[str, Any]:
         return {
             "id": self.id,
             "runtime": self.runtime,
             "status": self.status,
-            "chunks": self.chunks[since:],
-            "next": len(self.chunks),
+            "chunks": self.chunks[max(0, since - self.offset):],
+            "next": self.offset + len(self.chunks),
+            "truncated": since < self.offset,
             "error": self.error,
             "started": self.started,
             "finished": self.finished,
@@ -276,6 +348,7 @@ class RuntimeHandle:
         self.stats_cache: dict[str, Any] | None = None
         self.stats_at = 0.0
         self.stats_failed_at = 0.0
+        self.orphan_interrupted = False
 
     # ---- runtime agent ----------------------------------------------------
     def remote(self, *parts: str) -> str:
@@ -379,6 +452,22 @@ class RuntimeHandle:
             for session in conn.list_sessions():
                 if session.get("path") == path:
                     kernel_id = session["kernel"]["id"]
+                    # Only run_agent asks for the worker, holding worker_lock, before it sends
+                    # anything: if the kernel is busy now, it runs a command orphaned by a
+                    # restart of GPUDock. Nobody will collect its result, and everything sent
+                    # would queue behind it, so stop it. (The console is left alone: that may
+                    # be the user's own long-running code.)
+                    if which == self.WORKER and session["kernel"].get("execution_state") == "busy":
+                        conn.interrupt(kernel_id)
+                        self.orphan_interrupted = True
+                        # wait for it to wind down: a request queued behind a cell that
+                        # fails with KeyboardInterrupt would be aborted along with it
+                        deadline = time.monotonic() + 30
+                        while time.monotonic() < deadline:
+                            time.sleep(0.5)
+                            resp = conn.request("GET", f"api/kernels/{kernel_id}")
+                            if resp.status_code != 200 or resp.json().get("execution_state") != "busy":
+                                break
                     break
             if kernel_id is None:
                 _sid, kernel_id = conn.create_session(name=which)
@@ -461,8 +550,14 @@ class Manager:
         self.config_dir = config_dir
         self.runtime_fs_root = runtime_fs_root
         self.owned = OwnedRuntimes(config_dir / "runtimes.json")
+        self.usage = UsageLedger(config_dir / "usage.json")
         self.settings_path = config_dir / "app_settings.json"
         self.settings = Settings.load(self.settings_path)
+        # A create that was still waiting when GPUDock last quit may have finished
+        # afterwards; drop the "pending" mark so the idle auto-release covers it.
+        for name, meta in self.owned.all().items():
+            if meta.get("pending"):
+                self.owned.update(name, pending=False, created_at=meta.get("created_at") or now(), last_activity=now())
         self._api_factory = api_factory or (lambda: ColabApi(Authenticator(AuthSettings.load()).headers))
         self._login_fn = login_fn
         self._api: ColabApi | None = None
@@ -471,8 +566,12 @@ class Manager:
         self.jobs: dict[str, Job] = {}
         self.execs: dict[str, ExecRecord] = {}
         self.events: list[dict[str, Any]] = []
+        self.events_offset = 0
         self.login: dict[str, Any] = {"status": "idle", "url": None, "error": None}
         self._cache: dict[str, tuple[float, Any]] = {}
+        self._live: tuple[float, list[Runtime]] | None = None
+        self._live_lock = threading.Lock()
+        self._last_seen: dict[str, float] = {}
         self._reaper: threading.Thread | None = None
         self._stop = threading.Event()
 
@@ -499,9 +598,38 @@ class Manager:
             self.handles.clear()
             self._api = None
             self._cache.clear()
+            self._live = None
+
+    MAX_EVENTS = 300
 
     def _event(self, kind: str, message: str, **data: Any) -> None:
-        self.events.append({"i": len(self.events), "t": now(), "kind": kind, "message": message, **data})
+        self.events.append({"i": self.events_offset + len(self.events), "t": now(), "kind": kind, "message": message, **data})
+        if len(self.events) > self.MAX_EVENTS:
+            drop = len(self.events) - self.MAX_EVENTS
+            del self.events[:drop]
+            self.events_offset += drop
+
+    def events_since(self, since: int) -> dict[str, Any]:
+        return {"events": self.events[max(0, since - self.events_offset):], "next": self.events_offset + len(self.events)}
+
+    def live_runtimes(self, max_age: float = 3.0) -> list[Runtime]:
+        """Colab's runtime list, shared by every caller for a few seconds (the UI
+        polls it from each open tab; one request at a time goes to Colab)."""
+        cached = self._live
+        if cached and now() - cached[0] < max_age:
+            return cached[1]
+        with self._live_lock:
+            cached = self._live
+            if cached and now() - cached[0] < max_age:
+                return cached[1]
+            live = self.api.list_runtimes()
+            self._live = (now(), live)
+            for r in live:
+                self._last_seen[r.name] = now()
+            return live
+
+    def _invalidate_live(self) -> None:
+        self._live = None
 
     def handle(self, name: str) -> RuntimeHandle:
         name = _full(name)
@@ -570,12 +698,13 @@ class Manager:
         return self._cached("specs", 300, lambda: catalog.build_cards(self.api.list_specs()))
 
     def runtimes(self) -> dict[str, Any]:
-        live = self.api.list_runtimes()
+        live = self.live_runtimes()
         owned = self.owned.all()
         names = {r.name for r in live}
         # forget owned runtimes that Colab already reclaimed
         for name, meta in owned.items():
             if name not in names and not meta.get("pending"):
+                self.usage.add(name, meta, self._last_seen.get(name) or now())
                 self.owned.remove(name)
                 with self._lock:
                     handle = self.handles.pop(name, None)
@@ -584,7 +713,23 @@ class Manager:
                 self._event("reclaimed", f"{meta.get('label', name)} 已被 Colab 回收或在别处释放。", runtime=name)
         items = [self._runtime_view(r, owned.get(r.name)) for r in live]
         pending = [j.to_dict() for j in self.jobs.values() if j.kind == "create" and j.status == "running"]
-        return {"runtimes": items, "pending": pending, "auto_release_minutes": self.settings.auto_release_minutes}
+        for job_id, j in list(self.jobs.items()):
+            if j.finished and now() - j.finished > 3600:
+                self.jobs.pop(job_id, None)
+        return {
+            "runtimes": items,
+            "pending": pending,
+            "auto_release_minutes": self.settings.auto_release_minutes,
+            "release_on_exit": self.settings.release_on_exit,
+            "usage": self.usage_summary(items),
+        }
+
+    def usage_summary(self, items: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        running = [
+            {"start": r["created_at"], "end": now(), "cu_per_hour": r["cu_per_hour"]}
+            for r in (items or []) if r.get("owned") and r.get("created_at")
+        ]
+        return self.usage.summary(running)
 
     def _runtime_view(self, rt: Runtime, meta: dict[str, Any] | None) -> dict[str, Any]:
         spec = rt.spec or SpecKey("VARIANT_UNSPECIFIED", "NONE")
@@ -607,6 +752,7 @@ class Manager:
             "vram_gb": info.get("vram_gb"),
             "cu_per_hour": rate,
             "owned": meta is not None,
+            "auto": bool(meta and meta.get("auto")),
             "created_at": created,
             "uptime_s": uptime,
             "est_cu": round(uptime / 3600 * rate, 2) if (uptime and rate) else None,
@@ -620,7 +766,7 @@ class Manager:
     retry_wait_s = 45.0
     max_queue_minutes = 20.0
 
-    def create_runtime(self, accelerator: str, shape: str = "SHAPE_STANDARD", *, auto_retry: bool = True) -> Job:
+    def create_runtime(self, accelerator: str, shape: str = "SHAPE_STANDARD", *, auto_retry: bool = True, auto: bool = False) -> Job:
         """Ask Colab for a runtime. When the accelerator is out of stock
         (NO_RUNTIMES), keep retrying in the background for up to
         ``max_queue_minutes`` unless ``auto_retry`` is off or the job is cancelled."""
@@ -632,7 +778,7 @@ class Manager:
         if not match.eligible:
             raise PermissionError(f"你的账号当前不能申请 {match.key.label}，可能需要升级 Colab 订阅。")
         info = catalog.info_for(accelerator, shape)
-        job = Job(id=uuid.uuid4().hex[:12], kind="create", label=match.key.label, accelerator=accelerator, shape=shape, message="正在向 Colab 申请…")
+        job = Job(id=uuid.uuid4().hex[:12], kind="create", label=match.key.label, accelerator=accelerator, shape=shape, message="正在向 Colab 申请…", auto=auto)
         self.jobs[job.id] = job
 
         def attempt() -> Runtime:
@@ -659,7 +805,8 @@ class Manager:
                 self.owned.remove(name)
                 if self.owned.get(runtime.name) is None:
                     self.owned.add(runtime.name, label=match.key.label, accelerator=accelerator, shape=shape)
-            self.owned.update(runtime.name, pending=False, created_at=now(), last_activity=now())
+            self.owned.update(runtime.name, pending=False, created_at=now(), last_activity=now(), auto=auto)
+            self._invalidate_live()
             return runtime
 
         def run() -> None:
@@ -708,12 +855,30 @@ class Manager:
         if handle:
             handle.close()
         self.api.delete_runtime(name, allow_missing=True)
+        if meta:
+            self.usage.add(name, meta, now())
         self.owned.remove(name)
+        self._invalidate_live()
         label = (meta or {}).get("label", name)
         if reason == "idle":
             self._event("auto_released", f"{label} 已空闲 {self.settings.auto_release_minutes} 分钟，已自动释放以节省计算单元。", runtime=name)
+        elif reason == "task":
+            self._event("auto_released", f"任务完成，{label} 已按设置释放，计费已停止。", runtime=name)
         else:
             self._event("released", f"{label} 已释放。", runtime=name)
+
+    def release_all_owned(self) -> list[str]:
+        """Release every runtime GPUDock created (used when quitting). Returns labels."""
+        done = []
+        for name, meta in self.owned.all().items():
+            if meta.get("pending"):
+                continue
+            try:
+                self.release(name, reason="exit")
+                done.append(meta.get("label", name))
+            except Exception:
+                pass
+        return done
 
     # ---- code execution ---------------------------------------------------
     def execute(self, name: str, code: str) -> ExecRecord:
@@ -722,6 +887,8 @@ class Manager:
             raise RuntimeError("这个运行时正在执行代码，等它结束或先点“中断”。")
         record = ExecRecord(id=uuid.uuid4().hex[:12], runtime=handle.name, code=code)
         self.execs[record.id] = record
+        for old in [k for k, r in self.execs.items() if r.finished][:-30]:
+            self.execs.pop(old, None)
         handle.busy_exec = record.id
         self._touch(handle)
 
@@ -754,11 +921,13 @@ class Manager:
         self.owned.update(handle.name, last_activity=handle.last_activity)
 
     # ---- settings & auto-release -------------------------------------------
-    def update_settings(self, *, auto_release_minutes: int | None = None) -> Settings:
+    def update_settings(self, *, auto_release_minutes: int | None = None, release_on_exit: bool | None = None) -> Settings:
         if auto_release_minutes is not None:
             if not 0 <= auto_release_minutes <= 24 * 60:
                 raise ValueError("自动释放时间要在 0（关闭）到 1440 分钟之间。")
             self.settings.auto_release_minutes = auto_release_minutes
+        if release_on_exit is not None:
+            self.settings.release_on_exit = release_on_exit
         self.settings.save(self.settings_path)
         return self.settings
 
@@ -769,7 +938,7 @@ class Manager:
             return []
         released = []
         try:
-            live = {r.name for r in self.api.list_runtimes()}
+            live = {r.name for r in self.live_runtimes(max_age=0)}
         except Exception:
             return []
         for name, meta in self.owned.all().items():

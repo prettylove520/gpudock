@@ -1912,7 +1912,7 @@ def cmd_generate(args: dict) -> None:
         ext = ".png" if spec["kind"] == "image" else ".mp4"
         path = out_dir / f"{stem}{ext}"
         path.write_bytes(_PNG_1PX if ext == ".png" else b"\x00\x00\x00\x18ftypmp42")
-        result(files=[{"path": str(path), "name": path.name}], seed=seed, template=template)
+        result(files=[{"path": str(path), "name": path.name}], seed=seed, template=template, gen_seconds=0.5)
         return
     for loaded in _ollama_loaded():
         ollama_unload(loaded)
@@ -1941,8 +1941,9 @@ def cmd_generate(args: dict) -> None:
     if not files:
         raise RuntimeError("ComfyUI 运行完了，但没有找到输出文件")
     files.append({"path": str(api_path), "name": api_path.name})
-    log(f"生成完成，用时 {time.time() - t0:.0f} 秒，种子 {seed}")
-    result(files=files, seed=seed, template=template, prompt_id=pid)
+    gen_seconds = round(time.time() - t0, 1)
+    log(f"生成完成，用时 {gen_seconds:.0f} 秒，种子 {seed}")
+    result(files=files, seed=seed, template=template, prompt_id=pid, gen_seconds=gen_seconds)
 
 
 def _ollama_loaded() -> list[str]:

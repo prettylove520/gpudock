@@ -9,9 +9,11 @@ Two guards against other web pages on the same machine poking the API:
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import quote
 
 from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -45,13 +47,21 @@ class ExecBody(BaseModel):
 
 class SettingsBody(BaseModel):
     auto_release_minutes: int | None = None
+    release_on_exit: bool | None = None
 
 
 class TaskBody(BaseModel):
     kind: str
-    runtime: str
+    runtime: str  # a runtime id, or "auto" (with accelerator)
     params: dict[str, Any] = {}
     uploads: list[str] = []
+    accelerator: str | None = None
+    release_after: bool = False
+
+
+class RetryBody(BaseModel):
+    runtime: str | None = None
+    overrides: dict[str, Any] = {}
 
 
 class ReviewBody(BaseModel):
@@ -80,6 +90,18 @@ def create_app(
     tasks = tasks or TaskManager(manager)
     app.state.tasks = tasks
     expected = f"Bearer {token}"
+
+    # Output files are served outside /api with a per-file signature, so <video>
+    # and <img> can stream them (with Range) without an Authorization header.
+    def sign(task_id: str, name: str) -> str:
+        return hmac.new(token.encode(), f"{task_id}/{name}".encode(), hashlib.sha256).hexdigest()[:32]
+
+    def with_urls(view: dict[str, Any]) -> dict[str, Any]:
+        tid = view["id"]
+        view["outputs"] = [
+            {**o, "url": f"/files/{tid}/{quote(o['name'])}?sig={sign(tid, o['name'])}"} for o in view.get("outputs") or []
+        ]
+        return view
 
     @app.middleware("http")
     async def guard(request: Request, call_next):
@@ -195,16 +217,15 @@ def create_app(
     # ---- settings & events ----------------------------------------------------
     @app.get("/api/settings")
     def get_settings() -> dict[str, Any]:
-        return {"auto_release_minutes": manager.settings.auto_release_minutes}
+        return manager.settings.to_dict()
 
     @app.put("/api/settings")
     def put_settings(body: SettingsBody) -> dict[str, Any]:
-        s = manager.update_settings(auto_release_minutes=body.auto_release_minutes)
-        return {"auto_release_minutes": s.auto_release_minutes}
+        return manager.update_settings(auto_release_minutes=body.auto_release_minutes, release_on_exit=body.release_on_exit).to_dict()
 
     @app.get("/api/events")
     def events(since: int = 0) -> dict[str, Any]:
-        return {"events": manager.events[since:], "next": len(manager.events)}
+        return manager.events_since(since)
 
     # ---- models, uploads, tasks --------------------------------------------------
     @app.get("/api/catalog")
@@ -228,15 +249,20 @@ def create_app(
 
     @app.post("/api/tasks")
     def create_task(body: TaskBody) -> dict[str, Any]:
-        return tasks.create(body.kind, body.runtime, body.params, body.uploads).detail()
+        task = tasks.create(body.kind, body.runtime, body.params, body.uploads, accelerator=body.accelerator, release_after=body.release_after)
+        return with_urls(task.detail())
 
     @app.get("/api/tasks")
-    def list_tasks() -> list[dict[str, Any]]:
-        return tasks.list()
+    def list_tasks(active: bool = False, kind: str | None = None) -> list[dict[str, Any]]:
+        return [with_urls(t) for t in tasks.list(active=active, kind=kind)]
 
     @app.get("/api/tasks/{task_id}")
     def task_detail(task_id: str, log_since: int = 0) -> dict[str, Any]:
-        return tasks.get(task_id).detail(log_since)
+        return with_urls(tasks.get(task_id).detail(log_since))
+
+    @app.post("/api/tasks/{task_id}/retry")
+    def retry_task(task_id: str, body: RetryBody) -> dict[str, Any]:
+        return with_urls(tasks.retry(task_id, runtime=body.runtime, overrides=body.overrides).detail())
 
     @app.post("/api/tasks/{task_id}/cancel")
     def cancel_task(task_id: str) -> dict[str, Any]:
@@ -252,6 +278,13 @@ def create_app(
     def task_file(task_id: str, name: str):
         path = tasks.file_path(task_id, name)
         return FileResponse(path, filename=path.name)
+
+    @app.get("/files/{task_id}/{name:path}")
+    def signed_file(task_id: str, name: str, sig: str = "", download: bool = False):
+        if not hmac.compare_digest(sig, sign(task_id, name)):
+            return JSONResponse({"error": "链接无效或已过期", "code": "token"}, status_code=403)
+        path = tasks.file_path(task_id, name)
+        return FileResponse(path, filename=path.name, content_disposition_type="attachment" if download else "inline")
 
     @app.post("/api/tasks/{task_id}/reveal")
     def reveal_task(task_id: str) -> dict[str, Any]:

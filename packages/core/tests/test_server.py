@@ -161,7 +161,7 @@ def test_auto_release_only_touches_idle_owned_runtimes(env):
     name = done["result"]["name"]
 
     assert client.put("/api/settings", json={"auto_release_minutes": 99999}).status_code == 400
-    assert client.put("/api/settings", json={"auto_release_minutes": 1}).json() == {"auto_release_minutes": 1}
+    assert client.put("/api/settings", json={"auto_release_minutes": 1}).json()["auto_release_minutes"] == 1
     assert manager.reap_once() == []  # just created: not idle yet
 
     manager.owned.update(name, last_activity=time.time() - 120)
@@ -207,3 +207,55 @@ def test_out_of_stock_is_queued_retried_and_cancellable(env):
     job = client.post("/api/runtimes", json={"accelerator": "T4", "auto_retry": False}).json()
     done = wait_for(lambda: (j := client.get(f"/api/jobs/{job['id']}").json())["status"] != "running" and j)
     assert done["status"] == "error" and done["attempts"] == 1
+
+
+def test_spending_survives_release_and_exit_releases_the_rest(env):
+    client, manager, fake = env
+    names = []
+    for _ in range(2):
+        job = client.post("/api/runtimes", json={"accelerator": "T4"}).json()
+        done = wait_for(lambda j=job: (d := client.get(f"/api/jobs/{j['id']}").json())["status"] == "done" and d)
+        names.append(done["result"]["name"])
+    # pretend the first one ran for an hour
+    manager.owned.update(names[0], created_at=time.time() - 3600)
+    client.delete(f"/api/runtimes/{names[0].split('/')[-1]}")
+    usage = client.get("/api/runtimes").json()["usage"]
+    assert usage["today_cu"] >= 1.19 or usage["month_cu"] >= 1.19
+
+    assert manager.release_all_owned() == ["T4"]
+    assert names[1] in fake.deleted and "runtimes/users-own-notebook" in fake.live
+    assert client.put("/api/settings", json={"release_on_exit": False}).json()["release_on_exit"] is False
+    assert Manager(config_dir=manager.config_dir, api_factory=lambda: fake).settings.release_on_exit is False
+
+
+def test_pending_marks_from_a_previous_run_are_cleared(env):
+    _, manager, fake = env
+    manager.owned.add("runtimes/gpudock-left", label="L4", accelerator="L4", shape="SHAPE_STANDARD", pending=True)
+    fresh = Manager(config_dir=manager.config_dir, api_factory=lambda: fake)
+    assert fresh.owned.get("runtimes/gpudock-left")["pending"] is False
+
+
+def test_events_and_console_output_are_capped():
+    from gpudock_core.server.state import ExecRecord
+
+    m = Manager.__new__(Manager)
+    m.events, m.events_offset = [], 0
+    for i in range(Manager.MAX_EVENTS + 100):
+        m._event("info", f"e{i}")
+    assert len(m.events) == Manager.MAX_EVENTS
+    tail = m.events_since(Manager.MAX_EVENTS + 99)
+    assert [e["message"] for e in tail["events"]] == [f"e{Manager.MAX_EVENTS + 99}"] and tail["next"] == Manager.MAX_EVENTS + 100
+
+    rec = ExecRecord(id="x", runtime="r", code="")
+    for i in range(ExecRecord.MAX_CHUNKS + 10):
+        rec.add("stdout", str(i))
+    view = rec.view(0)
+    assert view["truncated"] and len(view["chunks"]) == ExecRecord.MAX_CHUNKS and view["next"] == ExecRecord.MAX_CHUNKS + 10
+    assert rec.view(view["next"] - 1)["chunks"][0]["text"] == str(ExecRecord.MAX_CHUNKS + 9)
+
+
+def test_cards_say_what_each_gpu_can_run():
+    cards = build_cards([RuntimeSpec(SpecKey("VARIANT_GPU", "T4"), True), RuntimeSpec(A100, True)])
+    t4, a100 = cards
+    assert "转写" in t4["can_run"] and "Wan2.2 A14B" in t4["cannot_run"]
+    assert "Wan2.2 A14B" in a100["can_run"] and a100["cannot_run"] == []
