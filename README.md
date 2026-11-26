@@ -33,6 +33,14 @@ cd packages/core && uv run gpudock
 
 浏览器会自动打开 GPUDock。想要独立窗口：`uv run --extra desktop gpudock --window`。
 
+想在任意目录直接输入 `gpudock` 启动，在仓库根目录装成全局命令（可编辑模式，改代码或重新构建前端后无需重装）：
+
+```bash
+uv tool install --editable ./packages/core
+```
+
+如果提示找不到命令，运行一次 `uv tool update-shell` 再重开终端。
+
 登录时，在 Google 授权页上**点“全选”**，一定要勾上 Colab 权限。
 
 > 从源码运行时，维护者需要先配置一次项目的 OAuth 客户端（见 [docs/m0.md](docs/m0.md)）。正式发布版会内置，用户直接登录。
