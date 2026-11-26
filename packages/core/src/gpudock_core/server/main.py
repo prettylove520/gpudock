@@ -11,6 +11,7 @@ import threading
 import webbrowser
 
 from ..auth import config_dir
+from ..proxy import use_system_proxy
 from .app import create_app
 from .state import Manager
 from .tasks import TaskManager
@@ -31,6 +32,8 @@ def _free_port(preferred: int) -> int:
 
 def main(argv: list[str] | None = None) -> None:
     import uvicorn
+
+    use_system_proxy()
 
     p = argparse.ArgumentParser(prog="gpudock", description="GPUDock：Google Colab 的图形界面")
     p.add_argument("--port", type=int, default=int(os.environ.get("GPUDOCK_PORT", 8765)))
