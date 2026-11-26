@@ -1,22 +1,13 @@
 import { del } from "../api";
-import { useApp, type Route } from "../ctx";
-import { hueStyle } from "../hues";
+import { useApp } from "../ctx";
 import type { GpuCardData, RuntimeView } from "../types";
-import { cu, duration, tierLabel, vram } from "../util";
-import { ChipArt, HwImage, Pic } from "../components/Logo";
+import { duration, tierLabel, vram } from "../util";
 import { PageHead } from "../components/common";
 import GpuGrid from "../components/GpuGrid";
 import Console from "../components/Console";
 
-const FEATURES: { route: Route; img: string; title: string; desc: string }[] = [
-  { route: "create", img: "feat-video", title: "创作", desc: "Wan2.2、LTX-2.5、MiniMax H3 生视频，FLUX 3、Qwen-Image 生图" },
-  { route: "dub", img: "feat-dub", title: "批量配音", desc: "视频翻译成另一种语言并重新配音，保留背景音乐" },
-  { route: "transcribe", img: "feat-transcribe", title: "批量转写", desc: "音视频转成带时间轴的字幕和文稿" },
-  { route: "tts", img: "feat-tts", title: "批量朗读", desc: "一行文字一个音频，预置音色或克隆" },
-];
-
 export default function Gpus() {
-  const { account, specs, specsError, data, runtimes, selected, setSelected, reloadRuntimes, toast, handle, startRuntime, go, confirm } = useApp();
+  const { account, specs, specsError, data, runtimes, selected, setSelected, reloadRuntimes, toast, handle, startRuntime, confirm } = useApp();
   const pending = data?.pending ?? [];
   const current = runtimes.find((r) => r.id === selected) ?? null;
   const pendingAccels = new Set(pending.map((p) => p.accelerator));
@@ -42,65 +33,63 @@ export default function Gpus() {
     }
   }
 
+  const burn = runtimes.reduce((sum, r) => sum + (r.cu_per_hour ?? 0), 0);
+  const unpriced = runtimes.some((r) => r.cu_per_hour == null);
+  const lede = runtimes.length
+    ? `${runtimes.length} 张卡在计费${burn ? `，每小时约 ${burn.toFixed(2)} CU` : ""}。${data?.auto_release_minutes ? `空闲 ${data.auto_release_minutes} 分钟会自动释放 GPUDock 开的卡。` : "空闲自动释放已关闭，用完记得手动释放。"}`
+    : pending.length
+      ? `正在向 Colab 申请 ${pending.map((p) => p.label).join("、")}，拿到后会出现在这里。`
+      : "现在没有卡在计费。挑一张启动，或者在各功能页选“自动”，提交任务时再申请。";
+
   return (
     <>
-      <PageHead eyebrow="01 / 显卡" title="你的 GPU 工作台" accent="" lede="启动一张 Colab 显卡，然后在这里执行代码、部署模型、跑批量任务。用完记得释放，或者交给“空闲自动释放”。" />
+      <PageHead title="显卡" lede={lede} />
 
-      <dl className="stat-strip rise">
-        <div>
-          <dt>运行中</dt>
-          <dd>{runtimes.length + pending.length}</dd>
+      <dl className="stat-strip">
+        <div title="正在运行的卡每小时合计的估算单价">
+          <dt>正在计费</dt>
+          <dd className="lead">
+            {burn.toFixed(2)} <small>CU/时</small>
+          </dd>
+          <span className="stat-note">
+            {runtimes.length ? `≈ $${(burn * 0.1).toFixed(2)}/时 · ${runtimes.length} 张卡${unpriced ? " · 部分卡未公开单价" : ""}` : pending.length ? `${pending.length} 张申请中` : "没有运行中的卡"}
+          </span>
         </div>
         <div title="按显卡运行时长和社区实测单价估算，只算 GPUDock 开的卡">
-          <dt>今天 / 本月花费</dt>
+          <dt>今天</dt>
           <dd>
-            {usage ? usage.today_cu.toFixed(1) : "—"}
-            <small> / {usage ? cu(usage.month_cu) : "—"}</small>
+            {usage ? usage.today_cu.toFixed(1) : "—"} <small>CU</small>
           </dd>
         </div>
-        <div>
-          <dt>可用加速器</dt>
+        <div title="按显卡运行时长和社区实测单价估算，只算 GPUDock 开的卡">
+          <dt>本月</dt>
           <dd>
-            {eligibleCount} <small>种</small>
+            {usage ? usage.month_cu.toFixed(1) : "—"} <small>CU</small>
           </dd>
         </div>
         <div>
           <dt>Colab 订阅</dt>
           <dd>{account ? tierLabel(account.tier) : "—"}</dd>
+          <span className="stat-note">{eligibleCount} 种加速器可用</span>
         </div>
       </dl>
 
-      <section className="feature-row rise" style={{ animationDelay: "40ms" }}>
-        {FEATURES.map((f) => (
-          <button key={f.route} className="feature" onClick={() => go(f.route)}>
-            <Pic src={`/img/${f.img}.webp`} className="feature-pic" fallback={<ChipArt size={40} />} />
-            <span className="feature-text">
-              <b>{f.title}</b>
-              <span className="subtle small">{f.desc}</span>
-            </span>
-            <span className="arrow">→</span>
-          </button>
-        ))}
-      </section>
-
-      <section className="block rise" style={{ animationDelay: "80ms" }}>
+      <section className="block">
         <div className="block-head">
           <h2>运行中</h2>
-          <span className="subtle small">点一行打开它的控制台</span>
+          {runtimes.length > 0 && <span className="subtle small">点一行打开它的控制台</span>}
         </div>
         {runtimes.length === 0 && pending.length === 0 ? (
           <div className="empty-state">
-            <ChipArt size={36} />
             <div>
-              <b>还没有运行中的显卡</b>
-              <p className="subtle small">在下面挑一张，几秒到几分钟就能用上。</p>
+              <b>没有运行中的卡</b>
+              <p className="subtle small">在下面的价目表里挑一张，通常 1–3 分钟就能用上。</p>
             </div>
           </div>
         ) : (
           <div className="rack">
             {pending.map((j) => (
-              <div key={j.id} className="rack-row pending" style={hueStyle(j.accelerator)}>
-                <HwImage accelerator={j.accelerator} className="rack-pic" />
+              <div key={j.id} className="rack-row pending">
                 <div className="rack-info">
                   <div className="rack-name">
                     {j.label}
@@ -124,7 +113,6 @@ export default function Gpus() {
               <div
                 key={rt.id}
                 className={`rack-row ${rt.id === selected ? "selected" : ""}`}
-                style={hueStyle(rt.accelerator)}
                 role="button"
                 tabIndex={0}
                 aria-pressed={rt.id === selected}
@@ -136,7 +124,6 @@ export default function Gpus() {
                   }
                 }}
               >
-                <HwImage accelerator={rt.accelerator} className="rack-pic" />
                 <div className="rack-info">
                   <div className="rack-name">
                     {rt.display_name}
@@ -160,22 +147,15 @@ export default function Gpus() {
                         <dd>{duration(rt.uptime_s)}</dd>
                       </div>
                     )}
-                    {rt.est_cu != null && (
-                      <div>
-                        <dt>估算</dt>
-                        <dd>{rt.est_cu} CU</dd>
-                      </div>
-                    )}
-                    {rt.auto_release_in_s != null && (
-                      <div>
-                        <dt>自动释放</dt>
-                        <dd>{duration(rt.auto_release_in_s)} 后</dd>
-                      </div>
-                    )}
+                    <div>
+                      <dt>单价</dt>
+                      <dd>{rt.cu_per_hour != null ? `${rt.cu_per_hour} CU/时` : "未公开"}</dd>
+                    </div>
                   </dl>
                 </div>
+                <Meter rt={rt} />
                 <div className="rack-actions">
-                  <span className={`tag ${rt.id === selected ? "on" : ""}`}>{rt.id === selected ? "控制台已打开" : "打开控制台"}</span>
+                  <span className="tag">{rt.id === selected ? "控制台已打开" : "打开控制台"}</span>
                   {rt.owned && (
                     <button
                       className="btn ghost danger"
@@ -195,15 +175,15 @@ export default function Gpus() {
       </section>
 
       {current && (
-        <section className="block rise" style={{ animationDelay: "120ms" }}>
+        <section className="block">
           <Console key={current.id} runtime={current} onError={handle} onChanged={reloadRuntimes} />
         </section>
       )}
 
-      <section className="block rise" style={{ animationDelay: "160ms" }}>
+      <section className="block">
         <div className="block-head">
-          <h2>启动新的显卡</h2>
-          <span className="subtle small">单价为社区实测估算（1 CU ≈ $0.10），以 Colab 实际计费为准。其实不用先开卡：在各功能页选“自动”，提交时会自动申请。</span>
+          <h2>价目表</h2>
+          <span className="board-note">单价是社区实测估算，1 CU ≈ $0.10，以 Colab 实际计费为准。</span>
         </div>
         {specs ? (
           <GpuGrid cards={specs} onStart={(card: GpuCardData, shape: string) => startRuntime(card.accelerator, shape, card.name)} pendingAccels={pendingAccels} />
@@ -214,5 +194,32 @@ export default function Gpus() {
         )}
       </section>
     </>
+  );
+}
+
+/** What a runtime has cost so far, and how long until it is released for idling. */
+function Meter({ rt }: { rt: RuntimeView }) {
+  const span = rt.auto_release_in_s != null ? rt.idle_s + rt.auto_release_in_s : null;
+  const share = span ? Math.min(1, rt.idle_s / span) : 0;
+  const caption = rt.busy
+    ? "正在工作，不会自动释放"
+    : rt.auto_release_in_s != null
+      ? `空闲 ${duration(rt.idle_s)}，${duration(rt.auto_release_in_s)} 后自动释放`
+      : rt.owned
+        ? "自动释放已关闭"
+        : "GPUDock 不会释放这张卡";
+  return (
+    <div className="meter">
+      <div className="meter-top">
+        <span>已花费</span>
+        <b>
+          {rt.est_cu != null ? rt.est_cu.toFixed(2) : "—"} <small>CU</small>
+        </b>
+      </div>
+      <div className="track idle" role="img" aria-label={caption}>
+        <span style={{ width: `${Math.round(share * 100)}%` }} />
+      </div>
+      <span>{caption}</span>
+    </div>
   );
 }

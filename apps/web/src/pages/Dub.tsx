@@ -100,14 +100,14 @@ export default function Dub() {
       />
       <div className="two-col">
         <div className="col">
-          <Card title="1. 选择显卡" hint="预置音色用 T4 即可；克隆原声需要 L4 或更好" delay={40}>
+          <Card title="选择显卡" hint="预置音色用 T4 即可；克隆原声需要 L4 或更好" delay={40}>
             <RuntimePicker value={target} onChange={setTarget} minVram={voiceMode === "clone" ? 12 : 8} bigRam={voiceMode === "clone"} suggest={suggest} />
             {review && target.release && <p className="subtle small">开了“先让我校对”：校对期间显卡会一直等你，确认后才继续并在完成时释放。</p>}
           </Card>
-          <Card title="2. 添加视频或音频" delay={80}>
+          <Card title="添加视频或音频" delay={80}>
             <FileDrop files={files} onChange={setFiles} accept="video/*,audio/*" label="拖入要配音的文件" />
           </Card>
-          <Card title="3. 语言" delay={120}>
+          <Card title="语言" delay={120}>
             <div className="lang-row">
               <Field label="原语言">
                 <select className="input" value={src} onChange={(e) => setSrc(e.target.value)}>
@@ -162,7 +162,7 @@ export default function Dub() {
           </Card>
         </div>
         <div className="col">
-          <Card title="4. 声音" delay={160}>
+          <Card title="声音" delay={160}>
             <Seg
               value={voiceMode}
               onChange={setVoiceMode}

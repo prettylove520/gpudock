@@ -106,7 +106,7 @@ export default function Console({
       <div className="console-head">
         <span className={`led ${running ? "busy" : "on"}`} />
         <div className="console-title">
-          <span className="mono">CONSOLE</span> {runtime.display_name}
+          <h2>{runtime.display_name} 控制台</h2>
         </div>
         <span className="subtle small">{rate(runtime.cu_per_hour)}</span>
       </div>
@@ -124,7 +124,7 @@ export default function Console({
       </div>
 
       <div className="snippets">
-        <span className="mono subtle small">快捷代码</span>
+        <span className="subtle small">快捷代码</span>
         {SNIPPETS.map((s) => (
           <button key={s.label} className="snippet" onClick={() => setCode(s.code)} disabled={running}>
             {s.label}
