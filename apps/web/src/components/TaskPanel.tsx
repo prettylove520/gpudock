@@ -31,12 +31,14 @@ export default function TaskPanel({
   showTitle = true,
   onDone,
   onRetried,
+  onDeleted,
 }: {
   taskId: string;
   compact?: boolean;
   showTitle?: boolean;
   onDone?: (t: TaskDetail) => void;
   onRetried?: (t: TaskDetail) => void;
+  onDeleted?: () => void;
 }) {
   const { handle, toast, confirm, retryTask, catalog } = useApp();
   const [task, setTask] = useState<TaskDetail | null>(null);
@@ -101,6 +103,17 @@ export default function TaskPanel({
     }
   }
 
+  async function remove() {
+    if (!(await confirm({ title: "删除这个任务？", body: "任务记录和 ~/GPUDock/outputs 里它的产出文件都会删掉，不能恢复。", ok: "删除", danger: true }))) return;
+    try {
+      await api(`/api/tasks/${taskId}`, { method: "DELETE" });
+      toast("info", "已删除");
+      onDeleted?.();
+    } catch (e) {
+      handle(e);
+    }
+  }
+
   return (
     <div className={`task-panel ${compact ? "compact" : ""}`}>
       <div className="task-head">
@@ -119,6 +132,7 @@ export default function TaskPanel({
               {task.status === "done" ? "再来一次" : "重新运行"}
             </button>
           )}
+          {!active && <button className="btn ghost danger" onClick={remove}>删除</button>}
         </div>
       </div>
       {facts.length > 0 && <div className="task-facts">{facts.map((f) => <span key={f}>{f}</span>)}</div>}

@@ -103,6 +103,10 @@ export default function Tasks() {
                           setFilter("all");
                           load();
                         }}
+                        onDeleted={() => {
+                          setOpen(null);
+                          load();
+                        }}
                       />
                     </div>
                   )}

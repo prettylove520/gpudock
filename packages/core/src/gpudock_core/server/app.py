@@ -269,6 +269,11 @@ def create_app(
         tasks.cancel(task_id)
         return {"ok": True}
 
+    @app.delete("/api/tasks/{task_id}")
+    def delete_task(task_id: str) -> dict[str, Any]:
+        tasks.delete(task_id)
+        return {"ok": True}
+
     @app.post("/api/tasks/{task_id}/review")
     def review_task(task_id: str, body: ReviewBody) -> dict[str, Any]:
         tasks.submit_review(task_id, body.edits)

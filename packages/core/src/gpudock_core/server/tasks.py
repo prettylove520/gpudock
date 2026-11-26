@@ -421,6 +421,18 @@ class TaskManager:
             except Exception:
                 pass
 
+    def delete(self, task_id: str) -> None:
+        """Forget a finished task and delete its output folder."""
+        task = self.get(task_id)
+        if task.status in ACTIVE:
+            raise ValueError("任务还在进行，先取消再删除")
+        folder = Path(task.out_dir).resolve()
+        outputs = (self.root / "outputs").resolve()
+        if folder.parent == outputs and folder.is_dir():
+            shutil.rmtree(folder)
+        del self.tasks[task_id]
+        self._save_history()
+
     def retry(self, task_id: str, *, runtime: str | None = None, overrides: dict[str, Any] | None = None) -> Task:
         """Run a finished task again with the same inputs. A dub reuses the
         transcript and the (reviewed) translation of the earlier run."""
