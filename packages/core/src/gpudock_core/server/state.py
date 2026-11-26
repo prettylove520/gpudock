@@ -84,12 +84,12 @@ class OwnedRuntimes:
         if not self.path.exists():
             return {}
         try:
-            return json.loads(self.path.read_text())
+            return json.loads(self.path.read_text(encoding="utf-8"))
         except ValueError:
             return {}
 
     def _save(self, data: dict[str, dict[str, Any]]) -> None:
-        self.path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+        self.path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
     def all(self) -> dict[str, dict[str, Any]]:
         with self._lock:
@@ -157,7 +157,7 @@ class UsageLedger:
         if not self.path.exists():
             return []
         try:
-            data = json.loads(self.path.read_text())
+            data = json.loads(self.path.read_text(encoding="utf-8"))
             return data if isinstance(data, list) else []
         except ValueError:
             return []
@@ -171,7 +171,7 @@ class UsageLedger:
             rows = [r for r in self._load() if r.get("end", 0) > now() - self.KEEP_DAYS * 86400]
             rows.append({"name": name, "label": meta.get("label", name), "accelerator": meta.get("accelerator"),
                          "start": start, "end": max(end, start), "cu_per_hour": info.get("cu_per_hour")})
-            self.path.write_text(json.dumps(rows, indent=1, ensure_ascii=False))
+            self.path.write_text(json.dumps(rows, indent=1, ensure_ascii=False), encoding="utf-8")
 
     def summary(self, running: list[dict[str, Any]]) -> dict[str, Any]:
         """CU spent today and this month (local time), closed sessions plus the running ones."""

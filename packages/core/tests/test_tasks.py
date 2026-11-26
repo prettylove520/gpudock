@@ -233,7 +233,7 @@ def test_dub_shortens_lines_that_do_not_fit(env):
     done = wait_task(client, t["id"])
     assert done["status"] == "done", done["logs"][-10:]
     assert any("配音偏长" in line for line in done["logs"])
-    segs = json.loads(tasks.file_path(t["id"], "long.segments.json").read_text())
+    segs = json.loads(tasks.file_path(t["id"], "long.segments.json").read_text(encoding="utf-8"))
     first = next(s for s in segs if s["id"] == 1)
     assert len(first["text"]) < len(long_line)  # shortened by the (fake) LLM pass
     assert abs(duration(tasks.file_path(t["id"], "long.dubbed.mp4")) - 6.0) < 0.6
