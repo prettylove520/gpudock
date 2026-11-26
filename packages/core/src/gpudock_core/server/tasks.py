@@ -331,7 +331,7 @@ class TaskManager:
         if not self.history_path.exists():
             return
         try:
-            for s in json.loads(self.history_path.read_text()):
+            for s in json.loads(self.history_path.read_text(encoding="utf-8")):
                 interrupted = s["status"] not in ("done", "error", "cancelled")
                 t = Task(
                     id=s["id"], kind=s["kind"], title=s["title"], runtime=s["runtime"], params=s.get("params") or {},
@@ -353,7 +353,7 @@ class TaskManager:
         with self._history_lock:
             done = sorted(self.tasks.values(), key=lambda t: t.created)[-200:]
             tmp = self.history_path.with_suffix(".tmp")
-            tmp.write_text(json.dumps([t.record() for t in done], ensure_ascii=False, indent=1))
+            tmp.write_text(json.dumps([t.record() for t in done], ensure_ascii=False, indent=1), encoding="utf-8")
             tmp.replace(self.history_path)
 
     # ---- public API -----------------------------------------------------------
@@ -477,7 +477,7 @@ class TaskManager:
         cfg = {"base_url": "", "model": ""}
         if self.translator_path.exists():
             try:
-                cfg.update(json.loads(self.translator_path.read_text()))
+                cfg.update(json.loads(self.translator_path.read_text(encoding="utf-8")))
             except ValueError:
                 pass
         return {**cfg, "has_key": bool(self.secrets.get("translator-api-key"))}
@@ -486,7 +486,7 @@ class TaskManager:
         base_url = base_url.strip().rstrip("/")
         if base_url and not base_url.startswith(("http://", "https://")):
             raise ValueError("API 地址要以 http:// 或 https:// 开头")
-        self.translator_path.write_text(json.dumps({"base_url": base_url, "model": model.strip()}, ensure_ascii=False))
+        self.translator_path.write_text(json.dumps({"base_url": base_url, "model": model.strip()}, ensure_ascii=False), encoding="utf-8")
         if api_key is not None:
             self.secrets.set("translator-api-key", api_key.strip() or None)
         return self.translator()

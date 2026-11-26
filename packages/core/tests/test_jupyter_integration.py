@@ -114,6 +114,7 @@ def test_eval_json(kernel):
     assert kernel.eval_json("{'a': [1, 2], 'b': x}", setup="x = 'y'") == {"a": [1, 2], "b": "y"}
 
 
+@pytest.mark.posix_runtime
 def test_interrupt(conn, kernel):
     msg_id = kernel.send_execute("import time; time.sleep(30)")
     time.sleep(1.0)
@@ -164,7 +165,7 @@ def test_upload_download_roundtrip_chunked_and_resume(jupyter, conn, kernel, tmp
     assert kernel.eval_json("_gpudock_sha_result") == sha256_file(src)
 
     small = tmp_path / "small.txt"
-    small.write_text("hello 你好")
+    small.write_text("hello 你好", encoding="utf-8")
     assert upload(conn, small, "/content/gpudock/small.txt").chunks == 1
 
     dst = tmp_path / "back.bin"

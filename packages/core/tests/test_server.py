@@ -133,9 +133,11 @@ def test_full_runtime_lifecycle(env):
     view = wait_for(lambda: (v := client.get(f"/api/execs/{ex['id']}").json())["status"] != "running" and v)
     assert "6" in "".join(c["text"] for c in view["chunks"])
 
-    # Stats come from a separate monitor kernel (no GPU locally).
+    # Stats come from a separate monitor kernel; "gpu" appears only if this machine has one.
     stats = client.get(f"/api/runtimes/{rid}/stats").json()
-    assert "gpu" not in stats and "disk" in stats
+    assert "disk" in stats
+    if "gpu" in stats:
+        assert {"name", "mem_used_mb", "mem_total_mb"} <= set(stats["gpu"])
 
     # Release.
     assert client.delete(f"/api/runtimes/{rid}").json() == {"ok": True}
