@@ -409,7 +409,7 @@ export default function Create() {
         </div>
         {openId && (
           <Card delay={0}>
-            <TaskPanel key={openId} taskId={openId} onRetried={(t) => setOpenId(t.id)} onDone={loadWorks} />
+            <TaskPanel key={openId} taskId={openId} onRetried={(t) => setOpenId(t.id)} onDone={loadWorks} onDeleted={() => { setOpenId(null); loadWorks(); }} />
           </Card>
         )}
         {works && works.length === 0 ? (
